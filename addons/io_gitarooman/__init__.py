@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Gitaroo Man",
     "author": "boringhexi",
-    "version": (0, 1, 1),
+    "version": (0, 1, 2),
     "blender": (3, 1, 0),
     "location": "File > Import-Export",
     "description": "Import XG",  # , SSQ
