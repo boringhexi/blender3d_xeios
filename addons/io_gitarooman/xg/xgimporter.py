@@ -700,7 +700,9 @@ class XgImporter:
         :return: List of 3-tuples of vertex indices, each 3-tuple defines a triangle
         """
         # TODO not now: account for dagmesh using different winding orders
+        #  i.e. in Blender CW is forward-facing, so if CullFunc.CCWFRONT then reverse all winding order
         #  (though all gman models use double-sided)
+        #  Blender materials have a Backface Culling property, enable it when dagmesh is not double-sided
 
         if dagmeshnode.primData:
             self.warn(
@@ -736,33 +738,40 @@ class XgImporter:
                     tri = (tri[1], tri[0], tri[2])
                 tristrip_tris.append(tri)
 
-            # Fix triangle strip if it has wrong winding order
+            # Make sure this triangle strip has the correct winding order. That is,
+            # if this triangle strip's normals generally agree with the normals
+            # Blender would calculate for it, it's already good; otherwise, reverse
+            # this triangle strip's winding order so that Blender's calculated
+            # normals (which depend on winding order) will agree.
             if do_fix_winding_order:
-                normal_diffs = []
+                normals_alldiffs = []
                 for tri in tristrip_tris:
-                    # average vertex normal of this triangle
-                    avgvnormal = (
-                        -sum((Vector(dagnormals[vertidx]) for vertidx in tri), Vector())
-                        / 3
-                    )
-                    # Blender's face normal calculated from triangle's vertex positions
-                    blfnormal = mathutils.geometry.normal(
-                        dagcoords[vertidx] for vertidx in tri
-                    )
+                    # get average vertex normal of this triangle
+                    tri_dagnormals = (Vector(dagnormals[vertidx]) for vertidx in tri)
+                    tri_average_dagnormal = sum(tri_dagnormals, Vector()) / 3.0
+                    # get Blender's calculated face normal of this triangle
+                    tri_dagcoords = tuple(Vector(dagcoords[vertidx]) for vertidx in tri)
+                    bl_facenormal = mathutils.geometry.normal(tri_dagcoords)
                     # calculate the difference between the two
-                    normal_diff = avgvnormal.angle(blfnormal, None)
-                    if normal_diff is not None:
-                        normal_diffs.append(normal_diff)
-                    else:  # TODO test, see if this still happens after I start culling verts I guess?
-                        self.warn(
-                            f"unusable normal from xg:{avgvnormal} and bl:{blfnormal}"
-                        )
-
-                # If vertex normals generally disagree with calculated face
-                # normals, reverse the triangle strip's winding order
-                if normal_diffs:
-                    avg_normal_diff = sum(normal_diffs) / len(normal_diffs)
-                    if avg_normal_diff > 90:
+                    normals_diff = tri_average_dagnormal.angle(bl_facenormal, None)
+                    if normals_diff is not None:
+                        normals_alldiffs.append(normals_diff)
+                    else:  # unable to calculate a difference between normals
+                        # TODO test, see if any warnings still occur. If not, remove this check
+                        #  Known examples seen so far (known examples are ignored/will show no warning):
+                        #  - zero-area triangle resulting from 2 or more coordinates being identical
+                        is_zero_area_triangle = mathutils.geometry.area_tri(*tri_dagcoords) == 0
+                        is_known_example = is_zero_area_triangle
+                        if not is_known_example:
+                            self.warn(
+                                f"unusable normal from xg: {tri_average_dagnormal} and "
+                                f"bl:{bl_facenormal} from {tri_dagcoords}"
+                            )
+                # If the model's normals generally disagree with Blender's calculated normals...
+                if normals_alldiffs:
+                    avg_normal_diff = sum(normals_alldiffs) / len(normals_alldiffs)
+                    if avg_normal_diff > radians(90):
+                        # ...reverse the winding order.
                         tristrip_tris = (
                             (tri[1], tri[0], tri[2]) for tri in tristrip_tris
                         )
@@ -777,11 +786,6 @@ class XgImporter:
                 for i in range(len(trifan) - 2)
             )
             triangles.extend(tris)
-
-        # TODO: winding order is bullshit, I want to figure this out for once and for all
-        #  maybe start with kokuban, it's got trilists
-        #  Or hack a model to have each winding order, compare it to Blender
-        #  result, and write some damn notes in the .XG wiki page this time!
 
         return triangles
 
