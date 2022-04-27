@@ -354,7 +354,7 @@ class XgScene:
 
         dagnode: dag node, i.e. XgNode of type "xgDagTransform" or "xgDagMesh"
         children: list of XgNodes (or an empty list) to be parented to dagnode.
-            (So far the only known case is xgDagMeshes as children of a xgDagTransform.)
+            (So far the only known case is xgDagMeshes as children of an xgDagTransform)
         """
         # check for any non-dag nodes
         dagtypes = ("xgDagTransform", "xgDagMesh")

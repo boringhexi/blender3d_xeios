@@ -1,4 +1,4 @@
-"""xgimporter.py: import an xgscene.XgScene + xganimsep.AnimSepEntry data into Blender
+"""xgimporter.py: import XgScene into Blender
 
 TODO:
 - decide on a consistent function signature for the init/from methods
@@ -106,12 +106,7 @@ def url_to_png(url: str, dir_: str) -> Optional[str]:
 
 
 class XgImporter:
-
-    """an importer to import an XgScene into Blender
-
-    usage: TODO
-
-    """
+    """imports an XgScene into Blender"""
 
     def __init__(
         self,
@@ -121,7 +116,7 @@ class XgImporter:
         bl_name: str = "UNNAMED",
         global_import_scale: Optional[float] = None,
     ):
-        """create a XgImporter to import the XgScene into Blender
+        """create an XgImporter to import the XgScene into Blender
 
         :param xgscene: xgscene.XgScene instance, the XgScene to be imported
         :param texturedir: directory in which to search for textures. if None, textures
@@ -148,7 +143,6 @@ class XgImporter:
             global_import_scale = 1
         self._global_import_scale = global_import_scale
         gis = global_import_scale
-        # TODO maybe rename to bone_import_mtx and move down, if that's all it ever gets used for
         self._global_import_mtx = Matrix(
             (
                 [-gis, 0.00, 0.0, 0.0],
@@ -157,7 +151,9 @@ class XgImporter:
                 [0.00, 0.00, 0.0, 1.0],
             )
         )
-        # global_import_mtx: rotates 90deg about X, scales -1.0 across X, scales by gis
+        # matrix effect: rotates 90deg about X, scales -1.0 across X, scales by gis.
+        #   In other words, it swaps from XG's coordinate system to Blender's (and
+        #   scales as desired).
 
         self._bpyemptyobj = None
         self._bpyarmatureobj = None
@@ -170,7 +166,7 @@ class XgImporter:
 
         paths of the xganimseps and textures will be derived from xgscenepath
 
-        :param xgscenepath: path to a XG file
+        :param xgscenepath: path to an XG file
         :return: an XgImporter instance
         """
         bl_name = os.path.basename(xgscenepath)

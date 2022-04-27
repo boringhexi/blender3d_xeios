@@ -1,4 +1,4 @@
-"""xgscenereader.py: parse a XG file and return a xgscene.XgScene instance
+"""xgscenereader.py: parse an XG file and return an xgscene.XgScene instance
 
 For better documentation of XG file contents, see:
 http://gitaroopals.shoutwiki.com/wiki/.XG
@@ -13,7 +13,7 @@ from .xgscene import XgNode, XgScene
 DEBUG = False  # whether to print debug messages
 
 
-def DBG(s):
+def dbg(s):
     if DEBUG:
         print(s)
 
@@ -23,11 +23,6 @@ class Vertices(NamedTuple):
     normals: List[Tuple[float, float, float]]
     colors: List[Tuple[float, float, float, float]]
     texcoords: List[Tuple[float, float]]
-
-
-# TODO: animsep
-# XgSceneReader and XgAnimSepReader are two different things.
-# XgImporter will accept an XgScene and optionally an XgAnimSep object, I think
 
 
 class XgSceneReader:
@@ -66,18 +61,18 @@ class XgSceneReader:
         return cls(file, autoclose=autoclose)
 
     def read_xgscene(self) -> XgScene:
-        """read from the XG file, return a XgScene instance"""
+        """read from the XG file, return an XgScene instance"""
         try:
             magic = self._file.read(4)
             if magic != b"XGBv":
-                raise XgInvalidFileError(f"Not a XG file (unknown header {magic!r})")
+                raise XgInvalidFileError(f"Not an XG file (unknown header {magic!r})")
             version = self._file.read(4)
             if version != b"1.00":
                 raise XgInvalidFileError(f"Unknown file version {version!r}")
 
-            DBG("=== BEGIN PARSING XG FILE ===")
+            dbg("=== BEGIN PARSING XG FILE ===")
             if hasattr(self._file, "name") and self._file.name:
-                DBG(self._file.name)
+                dbg(self._file.name)
 
             token = self._read_pstr()
             while token:
@@ -110,7 +105,7 @@ class XgSceneReader:
         if token == ";":  # node declaration (create new node)
             node = XgNode(nodename, nodetype)
             self._xgscene.preadd_node(node)
-            DBG(f"Created and pre-added {node!r}")
+            dbg(f"Created and pre-added {node!r}")
 
         elif token == "{":  # node definition (update existing node)
             try:
@@ -119,7 +114,7 @@ class XgSceneReader:
                 raise XgReadError(
                     f"node {nodename!r} hasn't been declared yet", dbg_namepos
                 )
-            DBG(f"{node!r}:")
+            dbg(f"{node!r}:")
             token = self._read_pstr()
             while token != "}":
                 dbg_propval = None  # property value to print in debug text
@@ -283,7 +278,7 @@ class XgSceneReader:
 
                 if dbg_propval is None:
                     dbg_propval = getattr(node, token)  # use original value
-                DBG(f"  {token} = {dbg_propval}")
+                dbg(f"  {token} = {dbg_propval}")
 
                 token = self._read_pstr()  # next token
 
@@ -294,7 +289,7 @@ class XgSceneReader:
 
     def _parse_dag(self) -> None:
         """parse Directed Acyclic Graph from the XG file"""
-        DBG("Adding DAG nodes to DAG:")
+        dbg("Adding DAG nodes to DAG:")
         token = self._read_pstr()
         if token != "{":
             raise XgReadError(
@@ -326,7 +321,7 @@ class XgSceneReader:
                 token = self._read_pstr()
             self._xgscene.add_dagnode(dagnode, children)
 
-            DBG(f"  {dagnode} {children}")
+            dbg(f"  {dagnode} {children}")
 
             token = self._read_pstr()
 

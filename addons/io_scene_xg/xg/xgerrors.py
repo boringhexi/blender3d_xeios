@@ -9,7 +9,7 @@ class XgException(Exception):
 
 # read/parse errors
 class XgReadError(XgException):
-    """Error while reading/parsing a XgScene from a XG file
+    """Error while reading/parsing an XgScene from an XG file
 
     offset: position in file at which the error occured.
         If specified, offset is prepended to the error message,
@@ -35,7 +35,7 @@ class XgInvalidFileError(XgReadError):
 
 # import errors
 class XgImportError(XgException):
-    """Error while importing a XgScene into Blender"""
+    """Error while importing an XgScene into Blender"""
 
     pass
 

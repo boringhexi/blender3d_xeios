@@ -1,6 +1,5 @@
 """xganimsep.py: parse and write additional XG animation separation data
 
-
 Animation separation data is stored before the XG model's data in the XGM container.
 For better documentation, see the Animation Entry section in:
 http://gitaroopals.shoutwiki.com/wiki/.XGM
