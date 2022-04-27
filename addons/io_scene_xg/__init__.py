@@ -1,10 +1,12 @@
 bl_info = {
-    "name": "Gitaroo Man",
+    "name": "Xeios XG format",
     "author": "boringhexi",
     "version": (0, 1, 3),
     "blender": (3, 1, 0),
     "location": "File > Import-Export",
-    "description": "Import-Export XG",
+    "description": (
+        "For Xeios engine games like Gitaroo Man and まげる つける はしーる"
+    ),
     "warning": "",
     "doc_url": "",
     "category": "Import-Export",
@@ -120,11 +122,11 @@ class XG_PT_export_include(bpy.types.Panel):
 
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportXG.bl_idname, text="Gitaroo Man model (.XG)")
+    self.layout.operator(ImportXG.bl_idname, text="Xeios (.XG)")
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportXG.bl_idname, text="Gitaroo Man model (.XG)")
+    self.layout.operator(ExportXG.bl_idname, text="Xeios (.XG)")
 
 
 classes = (ImportXG, ExportXG, XG_PT_export_include)
