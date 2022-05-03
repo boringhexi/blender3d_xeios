@@ -7,6 +7,12 @@ class XgException(Exception):
     pass
 
 
+class XgSceneError(XgException):
+    """Error creating or using an XgScene"""
+
+    pass
+
+
 # read/parse errors
 class XgReadError(XgException):
     """Error while reading/parsing an XgScene from an XG file

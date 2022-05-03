@@ -8,7 +8,7 @@ from struct import unpack
 from typing import BinaryIO, List, NamedTuple, Optional, Tuple, Union
 
 from .xgerrors import XgInvalidFileError, XgReadError
-from .xgscene import XgNode, XgScene
+from .xgscene import Vertices, XgScene, new_xgnode
 
 DEBUG = False  # whether to print debug messages
 
@@ -16,13 +16,6 @@ DEBUG = False  # whether to print debug messages
 def dbg(s):
     if DEBUG:
         print(s)
-
-
-class Vertices(NamedTuple):
-    coords: List[Tuple[float, float, float]]
-    normals: List[Tuple[float, float, float]]
-    colors: List[Tuple[float, float, float, float]]
-    texcoords: List[Tuple[float, float]]
 
 
 class XgSceneReader:
@@ -103,7 +96,7 @@ class XgSceneReader:
         token = self._read_pstr()
 
         if token == ";":  # node declaration (create new node)
-            node = XgNode(nodename, nodetype)
+            node = new_xgnode(nodename, nodetype)
             self._xgscene.preadd_node(node)
             dbg(f"Created and pre-added {node!r}")
 
@@ -271,8 +264,7 @@ class XgSceneReader:
                 # encountered unknown property or input attribute
                 else:
                     raise XgReadError(
-                        f"{node} has unknown property or input "
-                        "attribute {token!r}",
+                        f"{node} has unknown property or input attribute {token!r}",
                         self._dbg_tokenpos,
                     )
 

@@ -1,9 +1,31 @@
 """xgscene.py: classes that represent an XG file's scene graph
 
+
+Usage:
+
+Constants: Use this to interpret "magic" values used by various XgNode properties
+
+new_xgnode: Use this function to create a blank XgNode of the defined name and type
+
+XgNode: a Union type that represents all valid XgNode types. Use this in type hints
+
+XgScene: Use this to initialize a new XgScene (including XgScene.from_path). Can also
+    use this class in type hints
+
 for better documentation of XG file contents, see:
 http://gitaroopals.shoutwiki.com/wiki/.XG
 """
-from typing import Any, Dict, List, Optional
+from inspect import get_annotations
+from typing import Any, Collection, Dict, List, NamedTuple, Optional, Tuple, Union
+
+from xg.xgerrors import XgSceneError
+
+
+def _make_first_letter_lowercase(string: str) -> str:
+    if not string:
+        return string
+    first_letter = string[0].lower()
+    return first_letter + string[1:]
 
 
 class Constants:
@@ -38,7 +60,7 @@ class Constants:
         KICKGROUP = 5
 
     class InterpolationType:
-        """ values used by xg*Interpolator.type (e.g. xgQuatInterpolator)
+        """values used by xg*Interpolator.type (e.g. xgQuatInterpolator)
 
         NONE - No interpolation between keyframes
         LINEAR - Linear interpolation between keyframes
@@ -105,133 +127,27 @@ class Constants:
         SPHEREMAP = 1
 
 
-class XgNode:
-    """a single node of an XG scene graph
+class Vertices(NamedTuple):
+    # TODO really this should be a better class. with a len, and better way to indicate
+    #  absent attribs than a blank list
+    coords: Collection[Tuple[float, float, float]]
+    normals: Collection[Tuple[float, float, float]]
+    colors: Collection[Tuple[float, float, float, float]]
+    texcoords: Collection[Tuple[float, float]]
 
-    an XgNode instance contains numerous other instance variables, divided into
-    "properties" and "input attributes". A full documentation of properties and
-    instance attributes is outside the scope of this script.
-    """
 
-    def __init__(self, name: str, nodetype: str) -> None:
-        """create an empty XgNode with the given name and nodetype
+class InputAttribute:
+    # TODO contains nodename (or node?) and outputtype
+    #  uhhh should I also include the inputattrib type somehow? hell idk
+    pass
 
-        :param name: name of this XgNode
-        :param nodetype: type of this XgNode, e.g. "xgMaterial"
-        """
+
+class XgBaseNode:
+    """base class for all XG node types. A single node of an XG scene graph"""
+
+    def __init__(self, name: str):
         self._xgnode_name = name
-        self._xgnode_type = nodetype
-
-        # Below are all the valid XgNode property and input attribute names:
-
-        # xgBgGeometry
-        self.density = None
-        self.vertices = None
-        self.inputGeometry: List["XgNode"] = []
-
-        # xgBgMatrix
-        self.position = None
-        self.rotation = None
-        self.scale = None
-        self.inputPosition: List["XgNode"] = []
-        self.inputRotation: List["XgNode"] = []
-        self.inputScale: List["XgNode"] = []
-        self.inputParentMatrix: List["XgNode"] = []
-
-        # xgBone
-        self.restMatrix = None
-        self.inputMatrix: List["XgNode"] = []
-
-        # xgDagMesh
-        self.primType = None
-        self.primCount = None
-        self.primData = None
-        self.triFanCount = None
-        self.triFanData = None
-        self.triStripCount = None
-        self.triStripData = None
-        self.triListCount = None
-        self.triListData = None
-        self.cullFunc = None
-        self.inputGeometry: List["XgNode"] = []
-        self.inputMaterial: List["XgNode"] = []
-
-        # xgDagTransform
-        self.inputMatrix: List["XgNode"] = []
-
-        # xgEnvelope
-        self.startVertex = None
-        self.weights = None
-        self.vertexTargets = None
-        self.inputMatrix1: List["XgNode"] = []
-        self.inputGeometry: List["XgNode"] = []
-
-        # xgMaterial
-        self.blendType = None
-        self.shadingType = None
-        self.diffuse = None
-        self.specular = None
-        self.flags = None
-        self.textureEnv = None
-        self.uTile = None
-        self.vTile = None
-        self.inputTexture: List["XgNode"] = []
-
-        # xgMultiPassMaterial
-        self.inputMaterial: List["XgNode"] = []
-
-        # xgNormalInterpolator
-        self.type = None
-        self.times = None
-        self.keys = None
-        self.targets = None
-        self.inputTime: List["XgNode"] = []
-
-        # xgQuatInterpolator
-        self.type = None
-        self.keys = None
-        self.inputTime: List["XgNode"] = []
-
-        # xgShapeInterpolator
-        self.type = None
-        self.times = None
-        self.keys = None
-        self.inputTime = None
-
-        # xgTexCoordInterpolator
-        self.type = None
-        self.times = None
-        self.keys = None
-        self.targets = None
-        self.inputTime: List["XgNode"] = []
-
-        # xgTexture
-        self.url = None
-        self.mipmap_depth = None
-
-        # xgTime
-        self.numFrames = None
-        self.time = None
-
-        # xgVec3Interpolator
-        self.type = None
-        self.keys = None
-        self.inputTime: List["XgNode"] = []
-
-        # xgVertexInterpolator
-        self.type = None
-        self.times = None
-        self.keys = None
-        self.targets = None
-
-        self._valid_property_names = {
-            name
-            for name in self.__dict__.keys()
-            if not (name.startswith("_") or name.startswith("input"))
-        }
-        self._valid_inputattrib_names = {
-            name for name in self.__dict__.keys() if name.startswith("input")
-        }
+        self._xgattributes: Dict[str, Any] = dict()
 
     @property
     def xgnode_name(self) -> str:
@@ -240,8 +156,8 @@ class XgNode:
 
     @property
     def xgnode_type(self) -> str:
-        """type of this XgNode (e.g. "xgMaterial")"""
-        return self._xgnode_type
+        """name of this XgNode's type, as would be seen inside an XG file"""
+        return _make_first_letter_lowercase(self.__class__.__name__)
 
     def __repr__(self) -> str:
         """short representation to aid in debugging"""
@@ -254,10 +170,10 @@ class XgNode:
 
         :param name: name of property, must be a valid XgNode property name
         :param value: property value
-        :raise AttributeError if name is one of the valid XgNode property names that was
-            defined in XgNode.__init__
+        :raise AttributeError if name isn't a valid property for this XgNode type
+            (see class definitions of individual XgNode types)
         """
-        if name in self._valid_property_names and hasattr(self, name):
+        if name in self._valid_property_names:
             setattr(self, name, value)
         else:
             raise AttributeError(f"{name!r} is not a valid XgNode property")
@@ -282,14 +198,216 @@ class XgNode:
             for inputattrib "inputMaterial", this should be an XgNode of nodetype
             "xgMaterial"
         :param outputtype: purpose unknown, currently unused
-        :raise AttributeError if inputtype is not one of the valid input attribute names
-            defined in XgNode.__init__
+        :raise AttributeError if name isn't a valid input attribute for this XgNode type
+            (see class definitions of individual XgNode types)
         """
-        if inputtype in self._valid_inputattrib_names:
-            inputlist = getattr(self, inputtype)
+        if inputtype in self._valid_input_attributes:
+            if hasattr(self, inputtype):
+                inputlist = getattr(self, inputtype)
+            else:
+                inputlist = []
+                setattr(self, inputtype, inputlist)
             inputlist.append(input_xgnode)
         else:
             raise AttributeError(f"{inputtype!r} is not a valid input attribute name")
+
+    @property
+    def _valid_property_names(self) -> Tuple:
+        """a tuple of valid property names for this class
+
+        property and input attribute names come from type annotations in subclasses
+        of this class. see XgBgGeometry for an example of properties and input
+        attributes being defined
+        """
+        anno = get_annotations(
+            self.__class__, globals=globals(), locals=locals(), eval_str=True
+        )
+        return tuple(
+            varname
+            for varname in anno.keys()
+            if not (varname.startswith("_") or varname.startswith("input"))
+        )
+
+    @property
+    def _valid_input_attributes(self) -> Tuple:
+        """a tuple of valid input attribute names for this class"""
+        anno = get_annotations(
+            self.__class__, globals=globals(), locals=locals(), eval_str=True
+        )
+        return tuple(varname for varname in anno.keys() if varname.startswith("input"))
+
+    @property
+    def all_properties(self) -> Dict[str, Any]:
+        """all properties of this node that have been set"""
+        return {
+            propname: propval
+            for propname, propval in self.__dict__.items()
+            if propname in self._valid_property_names
+        }
+
+    @property
+    def all_inputattribs(self) -> Dict[str, List["XgNode"]]:
+        """all input attributes of this node that have been set"""
+        return {
+            inputtype: inputlist
+            for inputtype, inputlist in self.__dict__.items()
+            if inputtype in self._valid_input_attributes
+        }
+
+
+class XgBgGeometry(XgBaseNode):
+    density: float
+    vertices: Vertices
+    inputGeometry: Collection[InputAttribute]
+
+
+class XgBgMatrix(XgBaseNode):
+    position: Tuple[float, float, float]
+    rotation: Tuple[float, float, float, float]
+    scale: Tuple[float, float, float]
+    inputPosition: Collection[InputAttribute]
+    inputRotation: Collection[InputAttribute]
+    inputScale: Collection[InputAttribute]
+    inputParentMatrix: Collection[InputAttribute]
+
+
+class XgBone(XgBaseNode):
+    restMatrix: Tuple[(float,) * 16]  # yes, 16 floats
+    inputMatrix: Collection[InputAttribute]
+
+
+class XgDagMesh(XgBaseNode):
+    primType: int
+    primCount: int
+    primData: Collection[int]
+    triFanCount: int
+    triFanData: Collection[int]
+    triStripCount: int
+    triStripData: Collection[int]
+    triListCount: int
+    triListData: Collection[int]
+    cullFunc: int
+    inputGeometry: Collection[InputAttribute]
+    inputMaterial: Collection[InputAttribute]
+
+
+class XgDagTransform(XgBaseNode):
+    inputMatrix: Collection[InputAttribute]
+
+
+class XgEnvelope(XgBaseNode):
+    startVertex: int
+    weights: Tuple[Tuple[float, float, float, float], ...]
+    vertexTargets: Collection[Tuple[int, ...]]
+    inputMatrix1: Collection[InputAttribute]
+    inputGeometry: Collection[InputAttribute]
+
+
+class XgMaterial(XgBaseNode):
+    blendType: int
+    shadingType: int
+    diffuse: Tuple[float, float, float, float]
+    specular: Tuple[float, float, float, float]
+    flags: int
+    textureEnv: int
+    uTile: int
+    vTile: int
+    inputTexture: Collection[InputAttribute]
+
+
+class XgMultiPassMaterial(XgBaseNode):
+    inputMaterial: Collection[InputAttribute]
+
+
+class XgNormalInterpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Collection[Tuple[float, float, float]]]
+    targets: Collection[int]
+    inputTime: Collection[InputAttribute]
+
+
+class XgQuatInterpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Tuple[float, float, float, float]]
+    inputTime: Collection[InputAttribute]
+
+
+class XgShapeInterpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Vertices]
+    targets: Collection[int]
+    inputTime: Collection[InputAttribute]
+
+
+class XgTexCoordInterpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Collection[Tuple[float, float]]]
+    targets: Collection[int]
+    inputTime: Collection[InputAttribute]
+
+
+class XgTexture(XgBaseNode):
+    url: str
+    mipmap_depth: int
+
+
+class XgTime(XgBaseNode):
+    numFrames: float
+    time: float
+
+
+class XgVec3Interpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Tuple[float, float, float]]
+    inputTime: Collection[InputAttribute]
+
+
+class XgVertexInterpolator(XgBaseNode):
+    type: int
+    times: Collection[float]
+    keys: Collection[Collection[Tuple[float, float, float]]]
+    targets: Collection[int]
+    inputTime: Collection[InputAttribute]
+
+
+_nodeclasses = (
+    XgBgGeometry,
+    XgBgMatrix,
+    XgBone,
+    XgDagMesh,
+    XgDagTransform,
+    XgEnvelope,
+    XgMaterial,
+    XgMultiPassMaterial,
+    XgNormalInterpolator,
+    XgQuatInterpolator,
+    XgShapeInterpolator,
+    XgTexCoordInterpolator,
+    XgTexture,
+    XgTime,
+    XgVec3Interpolator,
+    XgVertexInterpolator,
+)
+_nodenames_to_nodeclasses = {
+    _make_first_letter_lowercase(cls.__name__): cls for cls in _nodeclasses
+}
+
+XgNode = Union[_nodeclasses]
+
+
+def new_xgnode(nodename, nodetype) -> Union[_nodeclasses]:
+    try:
+        cls = _nodenames_to_nodeclasses[nodetype]
+    except KeyError:
+        raise XgSceneError(
+            f"Cannot create {nodetype!r} {nodename!r}, unknown node type {nodetype!r}"
+        )
+    return cls(nodename)
 
 
 class XgScene:
@@ -301,7 +419,7 @@ class XgScene:
     The DAG is a hierarchy of XgNodes connected by input attributes, e.g.
         xgDagMesh.inputMaterial -> xgMaterial.inputTexture -> xgTexture.
     Only dag nodes (XgNodes of type 'xgDagTransform' and 'xgDagMesh') can
-        added directly to the DAG via add_dagnode(). All other nodes must
+        be added directly to the DAG via add_dagnode(). All other nodes must
         be connected to these nodes by input attributes.
     """
 
