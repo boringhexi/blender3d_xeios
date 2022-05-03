@@ -50,3 +50,9 @@ class ImageMissingError(XgImportError):  # TODO currently unused
     """One or more required image files could not be found"""
 
     pass
+
+
+class XgWriteError(XgException):
+    """Error while encoding/writing an XgScene to an XG file"""
+
+    pass
