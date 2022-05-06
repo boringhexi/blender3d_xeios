@@ -1,5 +1,3 @@
-import os.path
-
 from .xg.xgexporter import XgExporter
 from .xg.xgscenewriter import XgSceneWriter
 

@@ -5,10 +5,10 @@ http://gitaroopals.shoutwiki.com/wiki/.XG
 """
 from itertools import chain, zip_longest
 from struct import pack
-from typing import BinaryIO, Collection, Iterable, List, NamedTuple, Tuple
+from typing import BinaryIO, Collection, Iterable, List
 
 from .xgerrors import XgWriteError
-from .xgscene import XgScene, Vertices
+from .xgscene import Vertices, XgScene
 
 DEBUG = False  # whether to print debug messages
 

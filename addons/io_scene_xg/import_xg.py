@@ -7,7 +7,9 @@ def load_xg(context, *, filepath, files, global_import_scale=None):
     dirname = os.path.dirname(filepath)
     for file in files:
         filepath = os.path.join(dirname, file.name)
-        xgimporter = XgImporter.from_path(filepath, global_import_scale=global_import_scale)
+        xgimporter = XgImporter.from_path(
+            filepath, global_import_scale=global_import_scale
+        )
         xgimporter.import_xgscene()
         del xgimporter
     context.view_layer.update()

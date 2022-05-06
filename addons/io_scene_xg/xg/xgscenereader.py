@@ -5,7 +5,7 @@ http://gitaroopals.shoutwiki.com/wiki/.XG
 """
 
 from struct import unpack
-from typing import BinaryIO, List, NamedTuple, Optional, Tuple, Union
+from typing import BinaryIO, List, Optional, Tuple, Union
 
 from .xgerrors import XgInvalidFileError, XgReadError
 from .xgscene import Vertices, XgScene, new_xgnode

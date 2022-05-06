@@ -7,15 +7,15 @@ TODO:
 import math
 import os.path
 import re
+from math import degrees, radians
 from operator import neg
 from typing import AnyStr, Dict, List, Optional, Sequence, Tuple, Union
-from math import radians, degrees
 
 import bpy
 import mathutils
 from bpy.types import Action, EditBone, Object
 from bpy_extras.io_utils import unpack_list
-from mathutils import Matrix, Vector, Quaternion, Euler
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 from .xganimsep import AnimSepEntry, read_animseps
 from .xgerrors import XgImportError
@@ -213,7 +213,8 @@ class XgImporter:
             bpy.context.mode == "EDIT" and bpy.context.active_object == bpyarmobj
         ):
             # prepare for armature editing (make active and enter Edit mode)
-            # may have to set to Object mode first, TODO test by starting import from Pose mode
+            # TODO may have to set to Object mode first,
+            #   test by starting import from Pose mode
             bpy.context.view_layer.objects.active = bpyarmobj
             bpy.ops.object.mode_set(mode="EDIT")
         return self._bpyarmatureobj
@@ -309,7 +310,9 @@ class XgImporter:
                         # skip meshes that were not created
                         if bpymeshobj is not None:
                             bpymeshobj.parent = self._get_armature(editmode=True)
-                            # TODO sloppy rn, but you must be in Pose mode when setting a object bone parent, else you get those annoying errors in the console
+                            # TODO sloppy rn, but you must be in Pose mode when setting
+                            #  a object bone parent, else you get those annoying errors
+                            #  in the console
                             bpy.ops.object.mode_set(mode="POSE")
                             bpymeshobj.parent_type = "BONE"
                             bpymeshobj.parent_bone = bpybone_name
@@ -381,9 +384,10 @@ class XgImporter:
                 )
 
                 # TODO does this happen with any xgBones or whatever...
-                #  if so, it's worth making a posable bone, since it can still deform verts
-                #  even though the game doesn't actually make it do it
-                #  (this happens with some xgDagTransforms, but that just does a whole dagmesh, who cares)
+                #  if so, it's worth making a posable bone, since it can still deform
+                #  verts even though the game doesn't actually make it do it
+                #  (this happens with some xgDagTransforms, but that just does a whole
+                #  dagmesh, who cares)
                 if bonenode.xgnode_type != "xgDagTransform":
 
                     # bpybone_name = self._init_bone_nomatrix(bonenode) # TODO idk
@@ -452,7 +456,7 @@ class XgImporter:
 
         :param dagmeshnode: XgNode of type "xgDagMesh"
         :param dagtransform: True if this xgDagMesh is transformed by an xgDagTransform.
-            Only used to issue a warning if it's also being transformed by an xgEnvelope.
+            Only used to issue a warning if it's also being transformed by an xgEnvelope
         :return: Blender Object containing Mesh data, or None if xgdagmesh is not
             actually of type "xgDagMesh"
         """
@@ -497,7 +501,8 @@ class XgImporter:
                         # TODO init its texture, too.
                         if hasattr(matnode, "inputTexture"):
 
-                            # TODO yeah, start thinking about doing init and loading at the same time...
+                            # TODO yeah, start thinking about doing init and loading at
+                            #  the same time...
                             #  if not for anything else, then at least for this bs
 
                             # set up material nodes to use a texture
@@ -511,7 +516,8 @@ class XgImporter:
                             # texture image
                             # TODO yes, it's kind of early to do during hierarchy setup,
                             #  but there's no reason to defer loading...
-                            # especially since check_existing will reuse already-loaded images by checking path
+                            # especially since check_existing will reuse already-loaded
+                            # images by checking path
 
                             # Look for a likely PNG in the same dir based on texnode.url
                             texnode = matnode.inputTexture[0]
@@ -538,7 +544,8 @@ class XgImporter:
                             bpytex.image = bpyimage
 
                             # TODO: among other things, how to vertex colors work.
-                            #  are they activated by xgmaterial settings or xgdagmesh settings
+                            #  are they activated by xgmaterial settings or xgdagmesh
+                            #  settings
 
                     else:
                         bpymat = self._mappings.regmatnode_bpymat[matnode]
@@ -696,9 +703,11 @@ class XgImporter:
         :return: List of 3-tuples of vertex indices, each 3-tuple defines a triangle
         """
         # TODO not now: account for dagmesh using different winding orders
-        #  i.e. in Blender CW is forward-facing, so if CullFunc.CCWFRONT then reverse all winding order
+        #  i.e. in Blender CW is forward-facing, so if CullFunc.CCWFRONT then reverse
+        #  all winding order
         #  (though all gman models use double-sided)
-        #  Blender materials have a Backface Culling property, enable it when dagmesh is not double-sided
+        #  Blender materials have a Backface Culling property, enable it when dagmesh is
+        #  not double-sided
 
         if hasattr(dagmeshnode, "primData"):
             self.warn(
@@ -753,17 +762,23 @@ class XgImporter:
                     if normals_diff is not None:
                         normals_alldiffs.append(normals_diff)
                     else:  # unable to calculate a difference between normals
-                        # TODO test, see if any warnings still occur. If not, remove this check
-                        #  Known examples seen so far (known examples are ignored/will show no warning):
-                        #  - zero-area triangle resulting from 2 or more coordinates being identical
-                        is_zero_area_triangle = mathutils.geometry.area_tri(*tri_dagcoords) == 0
+                        # TODO test, see if any warnings still occur. If not, remove
+                        #  this check
+                        #  Known examples seen so far (known examples are ignored/will
+                        #  show no warning):
+                        #  - zero-area triangle resulting from 2 or more coordinates
+                        #    being identical
+                        is_zero_area_triangle = (
+                            mathutils.geometry.area_tri(*tri_dagcoords) == 0
+                        )
                         is_known_example = is_zero_area_triangle
                         if not is_known_example:
                             self.warn(
                                 f"unusable normal from xg: {tri_average_dagnormal} and "
                                 f"bl:{bl_facenormal} from {tri_dagcoords}"
                             )
-                # If the model's normals generally disagree with Blender's calculated normals...
+                # If the model's normals generally disagree with Blender's calculated
+                # normals...
                 if normals_alldiffs:
                     avg_normal_diff = sum(normals_alldiffs) / len(normals_alldiffs)
                     if avg_normal_diff > radians(90):
@@ -797,7 +812,6 @@ class XgImporter:
             rmatrixti.invert()
             rpos, rrot, rscl = rmatrixti.decompose()
 
-
             if "Hand" in bpybonename:
                 rm = rmatrixti
                 print(bpybonename)
@@ -819,7 +833,6 @@ class XgImporter:
                 print(b)
                 print(bprsm)
 
-
             # rest position axis correction, scaling
             posx, posy, posz = rpos
             rpos2 = Vector((-posx, -posz, posy)) * self._global_import_scale
@@ -827,11 +840,9 @@ class XgImporter:
 
             # rest rotation axis correction
             rotx, roty, rotz = rrot.to_euler("ZYX")
-            rrot2 = Euler([rotx + radians(90) , -roty, -rotz], "ZYX")
+            rrot2 = Euler([rotx + radians(90), -roty, -rotz], "ZYX")
             # this adjustment makes bones line up much nicer e.g. PUMA_N.XG
-            nice_bones = Matrix(
-                ((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.0))
-            )
+            nice_bones = Matrix(((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.0)))
             rrot2m = rrot2.to_matrix() @ nice_bones
 
             # rest scale axis correction
@@ -845,11 +856,16 @@ class XgImporter:
             # set this bone's rest pose
             bpyebone = bpyarmobj.data.edit_bones[bpybonename]
             bpyebone.matrix = rpos2m @ rrot2m.to_4x4()
-            #bpyebone.matrix = Matrix()  # TODO temporary override to test animation keys
+            # bpyebone.matrix = Matrix()  # TODO temporary override to test anim keys
 
-            uncorrected = Matrix.Translation(rpos * self._global_import_scale) @ rrot.to_matrix().to_4x4()
-            bpyebone.matrix = uncorrected  # TODO temporary override, test uncorrected rest pose
-            #bpyebone.matrix = Matrix()
+            uncorrected = (
+                Matrix.Translation(rpos * self._global_import_scale)
+                @ rrot.to_matrix().to_4x4()
+            )
+            bpyebone.matrix = (
+                uncorrected  # TODO temporary override, test uncorrected rest pose
+            )
+            # bpyebone.matrix = Matrix()
             bpyebone.length = BONE_SIZE
 
             # TODO sloppy check go!
@@ -861,22 +877,23 @@ class XgImporter:
             # ).length > EPS
             # if bpyebone.children and (haspos or hasrot or hasscl):
             #     raise Exception(
-            #         "Author wanted to know if there are any xgBones with a nontrivial "
-            #         f"rest pose *and* children, well guess what {bpybonename!r} is one"
+            #         "Author wanted to know if there are any xgBones with a "
+            #         "nontrivial rest pose *and* children, well guess what "
+            #         f"{bpybonename!r} is one"
             #     )
 
     def _load_animations(self) -> None:
-        """create actions, load animation data from the XG scene into the Blender bones
-
-        """
+        """create actions, load animation data from the XG scene into Blender bones"""
         # bones need to have been positioned by now.
         #  at the very least, any given bone about to be animated should be at its
-        #  final rest pose position. Maybe can get away with positioning its parents later...
+        #  final rest pose position. Maybe can get away with positioning its parents
+        #  later...
 
         animseps = self._xganimseps
         if not animseps:
             return
-        # TODO need editmode so it can get the edit_bone matrices. But I may end up storing that rest PRS stuff in a mapping so that no editmode is needed
+        # TODO need editmode so it can get the edit_bone matrices. But I may end up
+        #  storing that rest PRS stuff in a mapping so that no editmode is needed
         bpyarmobj = self._get_armature(editmode=True)
         bpyarmobj.animation_data_create()
 
@@ -905,10 +922,14 @@ class XgImporter:
                 pass
 
             pos_interpolator = (
-                matrixnode.inputPosition[0] if hasattr(matrixnode, "inputPosition") else None
+                matrixnode.inputPosition[0]
+                if hasattr(matrixnode, "inputPosition")
+                else None
             )
             rot_interpolator = (
-                matrixnode.inputRotation[0] if hasattr(matrixnode, "inputRotation") else None
+                matrixnode.inputRotation[0]
+                if hasattr(matrixnode, "inputRotation")
+                else None
             )
             scl_interpolator = (
                 matrixnode.inputScale[0] if hasattr(matrixnode, "inputScale") else None
@@ -936,9 +957,10 @@ class XgImporter:
                 if bpyebone.children and (hasposanim or hasrotanim or hassclanim):
                     # TODO checking for something with a sloppy exception
                     raise Exception(
-                        "Author wanted to know if there are any PRS-animated bones with "
-                        f"children, guess what {bpybonename!r} is one. "
-                        f"({'P' if hasposanim else ''}{'R' if hasrotanim else ''}{'S' if hassclanim else ''})"
+                        "Author wanted to know if there are any PRS-animated bones "
+                        "with children, guess what {bpybonename!r} is one. "
+                        f"({'P' if hasposanim else ''}{'R' if hasrotanim else ''}"
+                        f"{'S' if hassclanim else ''})"
                     )
 
             for idx, animsep in enumerate(animseps):
@@ -958,11 +980,18 @@ class XgImporter:
                 # XYZ position anims
                 if pos_interpolator is not None:
                     # if False:
-                    #     poskeys_absolute = [Vector((-x, -z, y)) * self._global_import_scale for x, y, z in pos_interpolator.keys]
-                    poskeys_uncorrected_absolute = [Vector((x,y,z)) * self._global_import_scale for x,y,z in pos_interpolator.keys]
+                    #     poskeys_absolute = [Vector((-x, -z, y)) *
+                    #     self._global_import_scale for x, y, z in
+                    #     pos_interpolator.keys]
+                    poskeys_uncorrected_absolute = [
+                        Vector((x, y, z)) * self._global_import_scale
+                        for x, y, z in pos_interpolator.keys
+                    ]
 
                     # TODO rest rot affects pos diffs
-                    poskeys_uncorrected_diff = [v - rest_pos for v in poskeys_uncorrected_absolute]
+                    poskeys_uncorrected_diff = [
+                        v - rest_pos for v in poskeys_uncorrected_absolute
+                    ]
 
                     rest_rot_inv = rest_rot.copy()
                     rest_rot_inv.invert()
@@ -972,7 +1001,9 @@ class XgImporter:
                     interp_type = pos_interpolator.type
                     bpy_data_path = f'pose.bones["{bpybonename}"].location'
                     # process each axis X=0,Y=1,Z=2 separately
-                    for axis_idx, axis_keys in enumerate(zip(*poskeys_uncorrected_diff)):
+                    for axis_idx, axis_keys in enumerate(
+                        zip(*poskeys_uncorrected_diff)
+                    ):
                         fcurve = bpyaction.fcurves.new(
                             data_path=bpy_data_path, index=axis_idx
                         )
@@ -1002,9 +1033,11 @@ class XgImporter:
                 # import_interpolator_to_action() needs...
                 #  - interpnode,
                 #    interpnode gives .keys, .type [.times, .targets]
-                #  - bpybonename (for data_path string) that matches the matrixnode using this interpnode
+                #  - bpybonename (for data_path string) that matches the matrixnode
+                #    using this interpnode
                 #  - animsep
-                #    animsep gives us start_keyframe, end_keyframe to get the keys for this anim only
+                #    animsep gives us start_keyframe, end_keyframe to get the keys for
+                #    this anim only
                 #  - bpyaction (to add the fcurve to)
 
                 # WXYZ quaternion rotation anims
@@ -1013,8 +1046,8 @@ class XgImporter:
                     # print(f"rest_rot: {rest_rot.to_euler()}")
                     # rot_keys_quats = tuple(map(xgquat2blender, rot_interpolator.keys))
                     # rot_keys_quats = [
-                    #     Quaternion((w, x, y, z)) for w, x, y, z in rot_interpolator.keys
-                    # ]
+                    #     Quaternion((w, x, y, z)) for w, x, y, z in
+                    #     rot_interpolator.keys]
                     #
                     # # print(f"anim0:    {rot_keys_quats[0].to_euler()}")
                     # # print(f"anim0_r90:{rot_keys_quats[0].to_euler()}")
@@ -1024,8 +1057,8 @@ class XgImporter:
                     #
                     # # TODO temporary override, make all rot keys absolute
                     # rot_key_quats_diffs = [
-                    #     Quaternion((w, x, y, z)) for w, x, y, z in rot_interpolator.keys
-                    # ]
+                    #     Quaternion((w, x, y, z)) for w, x, y, z in
+                    #     rot_interpolator.keys]
                     #
                     # for i, quat in enumerate(rot_key_quats_diffs[:]):
                     #
@@ -1042,39 +1075,43 @@ class XgImporter:
                     #     e = Euler((e.x + radians(90), -e.y, -e.z), "ZYX")
                     #     rot_key_quats_diffs[i] = e.to_quaternion()
                     #
-                    #     # but how to I get from that, or from wxyz, to nice anim poses?
+                    #     # but how to get from that, or from wxyz, to nice anim poses?
                     #
                     #     pass
 
-
                     # okay, so getting absolute rots is easy
-                    rotkeys_uncorrected_absolute = [Quaternion((w,x,y,z)) for x,y,z,w in rot_interpolator.keys]
+                    rotkeys_uncorrected_absolute = [
+                        Quaternion((w, x, y, z)) for x, y, z, w in rot_interpolator.keys
+                    ]
 
                     # but, well, getting differential rots is harder
                     # I mean, it works when all rest rots are 0...
 
                     # no rot, for testing
-                    rotkeys_uncorrected_diff = [Quaternion() for
-                                                rabs in rotkeys_uncorrected_absolute]
-
+                    rotkeys_uncorrected_diff = [
+                        Quaternion() for rabs in rotkeys_uncorrected_absolute
+                    ]
 
                     # invert matrices. wrong when rest_rot is 0
                     for i, abs_rot in enumerate(rotkeys_uncorrected_absolute):
 
-
                         rrotm = rest_rot.to_matrix()
                         absrotm = abs_rot.to_matrix()
 
-                        diffrot = rrotm.inverted() @ absrotm.inverted() #um. I think this works
-                        diffrot = (absrotm @ rrotm).inverted() # this works too
-                        diffquat2 = rest_rot.rotation_difference(abs_rot.inverted()) # and this
+                        diffrot = (
+                            rrotm.inverted() @ absrotm.inverted()
+                        )  # um. I think this works
+                        diffrot = (absrotm @ rrotm).inverted()  # this works too
+                        diffquat2 = rest_rot.rotation_difference(
+                            abs_rot.inverted()
+                        )  # and this
 
                         diffquat = diffrot.to_quaternion()
                         rotkeys_uncorrected_diff[i] = diffquat
                         rotkeys_uncorrected_diff[i] = diffquat2
 
-
-                    # TODO may not need this after axis correction & differential poses? or maybe do this anyway for safety, idk
+                    # TODO may not need this after axis correction & differential poses?
+                    #  or maybe do this anyway for safety, idk
                     if len(rotkeys_uncorrected_diff) > 1:
                         for quat1, quat2 in zip(
                             rotkeys_uncorrected_diff, rotkeys_uncorrected_diff[1:]
@@ -1084,7 +1121,9 @@ class XgImporter:
                     interp_type = rot_interpolator.type
                     bpy_data_path = f'pose.bones["{bpybonename}"].rotation_quaternion'
                     # process each component W=0,X=1,Y=2,Z=3 separately
-                    for axis_idx, axis_keys in enumerate(zip(*rotkeys_uncorrected_diff)):
+                    for axis_idx, axis_keys in enumerate(
+                        zip(*rotkeys_uncorrected_diff)
+                    ):
                         fcurve = bpyaction.fcurves.new(
                             data_path=bpy_data_path, index=axis_idx
                         )
@@ -1110,15 +1149,18 @@ class XgImporter:
                                 keyframe_point.interpolation = "LINEAR"
 
                 # XYZ scale anims
-                #scl_interpolator = None  # TODO temporarily disable
+                # scl_interpolator = None  # TODO temporarily disable
                 if scl_interpolator is not None:
                     scl_keys = scl_interpolator.keys
                     # since Blender did not let us set a rest scale for this bone,
                     # adjust the pose scale to compenstate for it
                     if rest_scl is not None:
-                        scl_keys_restadj = [Vector((x/rest_scl.x, y/rest_scl.y, z/rest_scl.z)) for x,y,z in scl_keys]
+                        scl_keys_restadj = [
+                            Vector((x / rest_scl.x, y / rest_scl.y, z / rest_scl.z))
+                            for x, y, z in scl_keys
+                        ]
                     else:
-                        scl_keys_restadj = [Vector((x,y,z)) for x,y,z in scl_keys]
+                        scl_keys_restadj = [Vector((x, y, z)) for x, y, z in scl_keys]
 
                     interp_type = scl_interpolator.type
                     bpy_data_path = f'pose.bones["{bpybonename}"].scale'
@@ -1140,7 +1182,7 @@ class XgImporter:
                         fcurve.keyframe_points.foreach_set(
                             "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
                         )
-                        # (slow way until foreach_set supports enum/str values)
+                        # TODO (slow way until foreach_set supports enum/str values)
                         if interp_type == Constants.InterpolationType.NONE:
                             for keyframe_point in fcurve.keyframe_points:
                                 keyframe_point.interpolation = "CONSTANT"
@@ -1150,9 +1192,9 @@ class XgImporter:
                         # Also consider this approach:
                         # old_interp_type = context.user_preferences.edit.keyframe_new_interpolation_type
                         # context.user_preferences.edit.keyframe_new_interpolation_type = 'LINEAR'
-                        # # insert your  keyframes
+                        # # insert your keyframes
                         # context.user_preferences.edit.keyframe_new_interpolation_type = old_interp_type
-                # TODO Temporary for anim comparision
+                # TODO Temporary for anim comparison
                 bpy_nla_strip.scale = 1.8
 
     def _load_pose(self):
@@ -1169,15 +1211,18 @@ class XgImporter:
         bpy.context.view_layer.objects.active = bpyarmobj
         bpy.ops.object.mode_set(mode="POSE")
 
-        # TODO not handling parenting order for now, cause I'm testing with armature that has a flat bone hierarchy
+        # TODO not handling parenting order for now, cause I'm testing with armature
+        #  that has a flat bone hierarchy
         # for matrixnode, bpybonename in self._mappings.xgbgmatrix_bpybonename.items():
         #     bpyposebone = bpyarmobj.pose.bones[bpybonename]
         #     bpyposebone.rotation_mode = "QUATERNION"
         #     # bpyposebone.location = matrixnode.position
-        #     # bpyposebone.rotation_quaternion = (matrixnode.rotation[3], *matrixnode.rotation[:3])
+        #     # bpyposebone.rotation_quaternion = (matrixnode.rotation[3],
+        #     *matrixnode.rotation[:3])
         #     # bpyposebone.scale = matrixnode.
         #
-        #     pos_difference = Vector(matrixnode.position) - bpyposebone.matrix.to_translation()
+        #     pos_difference = Vector(matrixnode.position
+        #     ) - bpyposebone.matrix.to_translation()
         #
         #     posmatrix = Matrix.Translation(pos_difference)
         #     rotmatrix = (
@@ -1201,12 +1246,12 @@ class XgImporter:
                 continue
             bpyposebone = bpyarmobj.pose.bones[bpybonename]
             bpyposebone.rotation_mode = "QUATERNION"
-            # TODO maybe use edit_bone.matrix... or maybe that will end up taking after this for reasons of bones missing errors
+            # TODO maybe use edit_bone.matrix... or maybe that will end up taking after
+            #  this for reasons of bones missing errors
             rmtx = bonenode.restMatrix
             restmatrix = Matrix((rmtx[:4], rmtx[4:8], rmtx[8:12], rmtx[12:]))
             restmatrix.transpose()
             restmatrix.invert()
-
 
             # print(bpybonename)
             # print(bpyposebone.matrix.transposed())
@@ -1217,18 +1262,21 @@ class XgImporter:
             # rest_rot = restmatrix.to_quaternion()
 
             matrixnode = bonenode.inputMatrix[0]
-            posmtx = Matrix.Translation((c * self._global_import_scale for c in matrixnode.position))
+            posmtx = Matrix.Translation(
+                (c * self._global_import_scale for c in matrixnode.position)
+            )
             rotx, roty, rotz, rotw = matrixnode.rotation
             rotmtx = Quaternion((rotw, rotx, roty, rotz)).to_matrix().to_4x4()
             sclx, scly, sclz = matrixnode.scale
-            rsclx, rscly, rsclz = self._mappings.bpybonename_restscale.get(bpybonename, (1,1,1))
-            sclmtx_x = Matrix.Scale(sclx/rsclx, 4, (1,0,0))
-            sclmtx_y = Matrix.Scale(scly/rscly, 4, (0,1,0))
-            sclmtx_z = Matrix.Scale(sclz/rsclz, 4, (0,0,1))
+            rsclx, rscly, rsclz = self._mappings.bpybonename_restscale.get(
+                bpybonename, (1, 1, 1)
+            )
+            sclmtx_x = Matrix.Scale(sclx / rsclx, 4, (1, 0, 0))
+            sclmtx_y = Matrix.Scale(scly / rscly, 4, (0, 1, 0))
+            sclmtx_z = Matrix.Scale(sclz / rsclz, 4, (0, 0, 1))
 
             pose_matrix = posmtx @ rotmtx @ sclmtx_x @ sclmtx_y @ sclmtx_z
             bpyposebone.matrix = pose_matrix
-
 
     def warn(self, message: str) -> None:
         """print warning message to console, store in internal list of warnings"""

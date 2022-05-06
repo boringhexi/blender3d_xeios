@@ -5,8 +5,8 @@ For better documentation, see the Animation Entry section in:
 http://gitaroopals.shoutwiki.com/wiki/.XGM
 """
 
-from typing import NamedTuple, List, BinaryIO, Sequence, Optional, AnyStr, Union
 from struct import Struct
+from typing import AnyStr, BinaryIO, List, NamedTuple, Optional, Sequence, Union
 
 _struct_uint32 = Struct("<I")
 _struct_animsep_entry = Struct("<4f4I")

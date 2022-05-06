@@ -4,9 +4,7 @@ bl_info = {
     "version": (0, 1, 3),
     "blender": (3, 1, 0),
     "location": "File > Import-Export",
-    "description": (
-        "For Xeios engine games like Gitaroo Man and まげる つける はしーる"
-    ),
+    "description": "For Xeios engine games like Gitaroo Man and まげる つける はしーる",
     "warning": "",
     "doc_url": "",
     "category": "Import-Export",
