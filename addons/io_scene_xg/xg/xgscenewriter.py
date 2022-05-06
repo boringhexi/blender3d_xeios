@@ -52,6 +52,13 @@ class XgSceneWriter:
         self._file = file
         self._autoclose = autoclose
 
+        # (For testing only, will break Blender import/export while enabled)
+        # If True, assume the presence of and write the unused 4th vertex coordinate.
+        # Why? Because when testing XG file input and output, this enables us to read
+        # an XG file and then write it back out with contents identical to the original,
+        # which makes testing much easier.
+        self._dbg_vertcoord4 = False
+
     @classmethod
     def from_path(cls, filepath: str, autoclose: bool = True) -> "XgSceneWriter":
         """initialize an XgSceneWriter from an XG file path
@@ -281,6 +288,8 @@ class XgSceneWriter:
         """
         # in an XG file, coordinates have an unknown (probably unused) 4th value
         coords_padded = ((x, y, z, 1.0) for x, y, z in vertices.coords)
+        if self._dbg_vertcoord4:
+            coords_padded = vertices.coords  # coords already contain a 4th coordinate
 
         has_coords, has_normals, has_colors, has_texcoords = (bool(x) for x in vertices)
 

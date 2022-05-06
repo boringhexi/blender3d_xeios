@@ -41,6 +41,13 @@ class XgSceneReader:
         self._dbg_tokenpos = 0  # file position of last-read Pascal string
         # used as offset when raising XgReadError
 
+        # (For testing only, will break Blender import/export while enabled)
+        # If True, read and save the unused 4th vertex coordinate.
+        # Why? Because when testing XG file input and output, this enables us to read
+        # an XG file and then write it back out with contents identical to the original,
+        # which makes testing much easier.
+        self._dbg_vertcoord4 = False
+
     @classmethod
     def from_path(cls, filepath: str, autoclose: bool = True) -> "XgSceneReader":
         """initialize an XgSceneReader from an XG file path
@@ -363,7 +370,10 @@ class XgSceneReader:
         idx = 0  # current position in vData
         for x in range(numVerts):
             if hasCoords:
-                coords.append(vData[idx : idx + 3])  # ignore 4th coordinate
+                if self._dbg_vertcoord4:
+                    coords.append(vData[idx : idx + 4])
+                else:
+                    coords.append(vData[idx : idx + 3])  # ignore 4th coordinate
                 idx += 4
             if hasNormals:
                 normals.append(vData[idx : idx + 3])
