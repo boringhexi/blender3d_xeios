@@ -70,11 +70,19 @@ class XgSceneWriter:
         :param xgscene: XgScene to write out to the file
         :return: the number of bytes written to file
         """
-        num_bytes = self._write_header()
-        num_bytes += self._write_xgnode_declarations(xgscene)
-        num_bytes += self._write_xgnodes(xgscene)
-        num_bytes += self._write_dagsetup(xgscene)
-        return num_bytes
+        try:
+            num_bytes = self._write_header()
+            num_bytes += self._write_xgnode_declarations(xgscene)
+            num_bytes += self._write_xgnodes(xgscene)
+            num_bytes += self._write_dagsetup(xgscene)
+
+            if self._autoclose:
+                self._file.close()
+            return num_bytes
+        except Exception:
+            if self._autoclose:
+                self._file.close()
+            raise
 
     def _write_header(self):
         """writes the XG file header to file
