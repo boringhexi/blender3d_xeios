@@ -360,13 +360,13 @@ class XgImporter:
 
         if bonenode not in bonename_mapping:
             # initialize new Blender bone
-            if bonenode.inputMatrix:
+            if hasattr(bonenode, "inputMatrix"):
                 bpyarmobj = self._get_armature(editmode=True)
                 bpybone_name = self._init_bonematrix(bonenode.inputMatrix[0])
                 bpyeditbone = bpyarmobj.data.edit_bones[bpybone_name]
                 cur_mtxnode, cur_bpybone = bonenode.inputMatrix[0], bpyeditbone
                 # initialize new Blender bones all the way up the hierarchy
-                while cur_mtxnode.inputParentMatrix:
+                while hasattr(cur_mtxnode, "inputParentMatrix"):
                     par_mtxnode = cur_mtxnode.inputParentMatrix[0]
                     par_bpybone_name = self._init_bonematrix(par_mtxnode)
                     par_bpyeditbone = bpyarmobj.data.edit_bones[par_bpybone_name]
@@ -474,7 +474,7 @@ class XgImporter:
             mesh_mapping[dagmeshnode] = bpymeshobj
 
             # create material if it doesn't exist yet
-            if dagmeshnode.inputMaterial:
+            if hasattr(dagmeshnode, "inputMaterial"):
                 matnode = dagmeshnode.inputMaterial[0]
 
                 # if of type "xgMaterial", init as a regular material
@@ -495,7 +495,7 @@ class XgImporter:
                         self._mappings.regmatnode_bpymat[matnode] = bpymat
 
                         # TODO init its texture, too.
-                        if matnode.inputTexture:
+                        if hasattr(matnode, "inputTexture"):
 
                             # TODO yeah, start thinking about doing init and loading at the same time...
                             #  if not for anything else, then at least for this bs
@@ -561,7 +561,7 @@ class XgImporter:
             # TODO bones
             envelopenodes = []
             bggeometrynode = dagmeshnode.inputGeometry[0]
-            if bggeometrynode.inputGeometry:
+            if hasattr(bggeometrynode, "inputGeometry"):
                 envelopenodes = [
                     n
                     for n in bggeometrynode.inputGeometry
@@ -662,7 +662,7 @@ class XgImporter:
             # # TODO vertex groups I guess
             geomnode = dagmeshnode.inputGeometry[0]
             envelopenodes = []
-            if geomnode.inputGeometry:
+            if hasattr(geomnode, "inputGeometry"):
                 envelopenodes = [
                     node
                     for node in geomnode.inputGeometry
@@ -700,7 +700,7 @@ class XgImporter:
         #  (though all gman models use double-sided)
         #  Blender materials have a Backface Culling property, enable it when dagmesh is not double-sided
 
-        if dagmeshnode.primData:
+        if hasattr(dagmeshnode, "primData"):
             self.warn(
                 f"{dagmeshnode}'s primData will not be imported "
                 "(primData is still unknown, send the author a sample!)"
@@ -901,16 +901,17 @@ class XgImporter:
         # populate empty animations with keyframes
         for matrixnode, bpybonename in self._mappings.xgbgmatrix_bpybonename.items():
             # TODO need to account for times later, e.g. Flying O blinkenlights
-            times = matrixnode.times
+            if hasattr(matrixnode, "times"):
+                pass
 
             pos_interpolator = (
-                matrixnode.inputPosition[0] if matrixnode.inputPosition else None
+                matrixnode.inputPosition[0] if hasattr(matrixnode, "inputPosition") else None
             )
             rot_interpolator = (
-                matrixnode.inputRotation[0] if matrixnode.inputRotation else None
+                matrixnode.inputRotation[0] if hasattr(matrixnode, "inputRotation") else None
             )
             scl_interpolator = (
-                matrixnode.inputScale[0] if matrixnode.inputScale else None
+                matrixnode.inputScale[0] if hasattr(matrixnode, "inputScale") else None
             )
             rest_matrix = bpyarmobj.data.edit_bones[bpybonename].matrix
             rest_pos = rest_matrix.to_translation()

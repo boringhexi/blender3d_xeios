@@ -18,7 +18,7 @@ http://gitaroopals.shoutwiki.com/wiki/.XG
 from inspect import get_annotations
 from typing import Any, Collection, Dict, List, NamedTuple, Optional, Tuple, Union
 
-from xg.xgerrors import XgSceneError
+from .xgerrors import XgSceneError
 
 
 def _make_first_letter_lowercase(string: str) -> str:
