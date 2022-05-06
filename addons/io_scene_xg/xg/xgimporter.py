@@ -171,7 +171,7 @@ class XgImporter:
         """
         bl_name = os.path.basename(xgscenepath)
         texturedir = os.path.dirname(xgscenepath)
-        xgscenereader = XgSceneReader.from_path(xgscenepath)
+        xgscenereader = XgSceneReader.from_path(xgscenepath, autoclose=True)
         xgscene = xgscenereader.read_xgscene()
 
         animseppath = f"{os.path.splitext(xgscenepath)[0]}{os.path.extsep}animsep"

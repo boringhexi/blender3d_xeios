@@ -26,7 +26,7 @@ class XgSceneReader:
     scene = xr.read_xgscene()
     """
 
-    def __init__(self, file: BinaryIO, autoclose: bool = False) -> None:
+    def __init__(self, file: BinaryIO, autoclose: bool = True) -> None:
         """initialize an XgSceneReader from a file object
 
         :param file: a binary file object. The file position is expected to be at the
@@ -42,7 +42,7 @@ class XgSceneReader:
         # used as offset when raising XgReadError
 
     @classmethod
-    def from_path(cls, filepath: str, autoclose: bool = False) -> "XgSceneReader":
+    def from_path(cls, filepath: str, autoclose: bool = True) -> "XgSceneReader":
         """initialize an XgSceneReader from an XG file path
 
         :param filepath: path to an XG file

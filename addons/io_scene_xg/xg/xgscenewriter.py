@@ -40,7 +40,7 @@ class XgSceneWriter:
     xw.write_xgscene(my_xgscene)
     """
 
-    def __init__(self, file: BinaryIO, autoclose: bool = False) -> None:
+    def __init__(self, file: BinaryIO, autoclose: bool = True) -> None:
         """initialize an XgSceneWriter from a file object
 
         :param file: a binary file object. XG contents will be written to the current
@@ -53,7 +53,7 @@ class XgSceneWriter:
         self._autoclose = autoclose
 
     @classmethod
-    def from_path(cls, filepath: str, autoclose: bool = False) -> "XgSceneWriter":
+    def from_path(cls, filepath: str, autoclose: bool = True) -> "XgSceneWriter":
         """initialize an XgSceneWriter from an XG file path
 
         :param filepath: path to which to write an XG file
