@@ -709,7 +709,7 @@ class XgImporter:
         #  Blender materials have a Backface Culling property, enable it when dagmesh is
         #  not double-sided
 
-        if hasattr(dagmeshnode, "primData"):
+        if hasattr(dagmeshnode, "primData") and dagmeshnode.primData:
             self.warn(
                 f"{dagmeshnode}'s primData will not be imported "
                 "(primData is still unknown, send the author a sample!)"
