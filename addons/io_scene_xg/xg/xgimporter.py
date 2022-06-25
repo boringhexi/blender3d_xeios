@@ -690,16 +690,16 @@ class XgImporter:
             # make double-sided if dagmesh is so
 
     def _tri_indices_from_dagmesh(
-        self, dagmeshnode: XgNode, fix_windorder: bool = True
+        self, dagmeshnode: XgNode, fix_winding_order: bool = True
     ) -> List[Tuple[int, int, int]]:
         """return a list of triangles (vert indices) from dagmeshnode
 
         (helper method used by _load_meshes) #TODO can label other methods this way
 
         :param dagmeshnode: XgNode of type "xgDagMesh" containing the triangles
-        :param fix_windorder: if True, reverse triangle winding order where necessary
-            to prevent Blender's auto-generated normals from looking weird. Without this
-            fix, badly-lit surfaces may appear if you edit the mesh.
+        :param fix_winding_order: if True, reverse triangle winding order where
+            necessary to prevent Blender's auto-generated normals from looking weird.
+            Without this fix, badly-lit surfaces may appear.
         :return: List of 3-tuples of vertex indices, each 3-tuple defines a triangle
         """
         # TODO not now: account for dagmesh using different winding orders
@@ -721,17 +721,19 @@ class XgImporter:
         trilists = tridata_to_prims(dagmeshnode.triListData, dagmeshnode.primType)
         for trilist in trilists:
             tris = (trilist[i : i + 3] for i in range(0, len(trilist) - 2, 3))
+            if fix_winding_order:
+                tris = [[tri[2], tri[1], tri[0]] for tri in tris]
             triangles.extend(tris)
 
         # Triangle strips:
         # triangle strips in this game seem to have semi-random winding order, leading
-        # to the problem described in the dosctring and resolved by fix_windorder
+        # to the problem described in the dosctring and resolved by fix_winding_order
         dagcoords = dagmeshnode.inputGeometry[0].vertices.coords
         dagnormals = dagmeshnode.inputGeometry[0].vertices.normals
-        do_fix_winding_order = (
-            fix_windorder
-            and dagnormals
-            and (dagmeshnode.cullFunc == Constants.CullFunc.TWOSIDED)
+        fix_tristrip_winding_order = (
+                fix_winding_order
+                and dagnormals
+                and (dagmeshnode.cullFunc == Constants.CullFunc.TWOSIDED)
         )
         tristrips = tridata_to_prims(dagmeshnode.triStripData, dagmeshnode.primType)
         for tristrip in tristrips:
@@ -748,7 +750,7 @@ class XgImporter:
             # Blender would calculate for it, it's already good; otherwise, reverse
             # this triangle strip's winding order so that Blender's calculated
             # normals (which depend on winding order) will agree.
-            if do_fix_winding_order:
+            if fix_tristrip_winding_order:
                 normals_alldiffs = []
                 for tri in tristrip_tris:
                     # get average vertex normal of this triangle
@@ -790,12 +792,15 @@ class XgImporter:
             triangles.extend(tristrip_tris)
 
         # Triangle fans:
+        # TODO not tested, don't know if any existing models use trifans
         trifans = tridata_to_prims(dagmeshnode.triFanData, dagmeshnode.primType)
         for trifan in trifans:
             tris = (
                 (trifan[0], trifan[i + 1], trifan[i + 2])
                 for i in range(len(trifan) - 2)
             )
+            if fix_winding_order:
+                tris = [[tri[2], tri[1], tri[0]] for tri in tris]
             triangles.extend(tris)
 
         return triangles
