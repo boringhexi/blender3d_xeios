@@ -318,6 +318,8 @@ class XgSceneReader:
                     )
                 children.append(child)
                 token = self._read_pstr()
+            for node in (dagnode, *children):
+                self._xgscene.preadd_node(node)
             self._xgscene.add_dagnode(dagnode, children)
 
             dbg(f"  {dagnode} {children}")

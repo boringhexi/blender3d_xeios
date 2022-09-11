@@ -9,7 +9,7 @@ def save_xg(
     xgexporter = XgExporter(
         global_export_scale=global_export_scale, use_selection=use_selection
     )
-    xgscene = xgexporter.export_xgscene()
+    xgscene = xgexporter.export_xgscene(context)
     del xgexporter
     xgwriter.write_xgscene(xgscene)
 

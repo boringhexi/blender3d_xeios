@@ -145,14 +145,22 @@ class InputAttribute:
 class XgBaseNode:
     """base class for all XG node types. A single node of an XG scene graph"""
 
-    def __init__(self, name: str):
+    def __init__(self, name: Optional[str]):
         self._xgnode_name = name
         self._xgattributes: Dict[str, Any] = dict()
 
     @property
-    def xgnode_name(self) -> str:
-        """name of this XgNode"""
+    def xgnode_name(self) -> Optional[str]:
+        """name of this XgNode. can temporarily be None
+
+        By the time xgscene.preadd_node is called on this node, it needs to have an
+        actual str name instead of a None value.
+        """
         return self._xgnode_name
+
+    @xgnode_name.setter
+    def xgnode_name(self, value: Optional[str]):
+        self._xgnode_name = value
 
     @property
     def xgnode_type(self) -> str:
@@ -450,9 +458,15 @@ class XgScene:
         """pre-add XgNode node to the scene
 
         Pre-add an XgNode to the scene. It isn't part of the DAG yet (and therefore
-        won't be imported), but it can now be added to the DAG via add_dagnode.
-        After adding, the new node can be retrieved with x.get_node(xgnode.xgnode_name).
+        won't be displayed in-game or imported into Blender), but DAG nodes pre-added
+        this way can now be added to the DAG via add_dagnode. After adding, the new
+        node can be retrieved with x.get_node(xgnode.xgnode_name).
+
+        :param xgnode: instance of subclass of XgBaseNode
+        :raises ValueError if xgnode has no name yet (i.e. None)
         """
+        if xgnode.xgnode_name is None:
+            raise ValueError(f"{xgnode} does not have a name yet, cannot pre-add")
         self._preadded_nodes[xgnode.xgnode_name] = xgnode
 
     def get_node(self, name) -> XgNode:
@@ -462,30 +476,34 @@ class XgScene:
         return self._preadded_nodes[name]
 
     def add_dagnode(self, dagnode: XgNode, children: List[Optional[XgNode]]) -> None:
-        """add dagnode & children to DAG, or raise ValueError if they aren't dag nodes
+        """add `dagnode` & `children` to the XgScene's DAG
 
-        Add dagnode and its child nodes to the scene's DAG (Directed Acyclic
-            Graph). Only dag nodes are valid arguments; non-dag nodes will
-            cause a ValueError to be raised. (See XgScene's class documentation
-            text for more information.)
-        Note: dagnode & its children should have already been added with preadd_node().
+        Add `dagnode` and its child nodes to the scene's DAG (Directed Acyclic
+        Graph), so that they will be displayed in-game or imported into Blender. If
+        `dagnode` is already in the DAG, then `children` will be added to the children
+        already in the DAG.
 
-        dagnode: dag node, i.e. XgNode of type "xgDagTransform" or "xgDagMesh"
-        children: list of XgNodes (or an empty list) to be parented to dagnode.
+        :param dagnode: dag node, i.e. XgNode of type "xgDagTransform" or "xgDagMesh"
+        :param children: iterable of XgNodes to be parented to dagnode, can be empty.
             (So far the only known case is xgDagMeshes as children of an xgDagTransform)
+        :raises TypeError if `dagnode` or any `children` are not of type XgDagTransform
+            or XgDagMesh
+        :raises ValueError if 'dagnode' or any 'children' have not yet been pre-added
+            via x.preadd_node().
         """
         # check for any non-dag nodes
-        dagtypes = ("xgDagTransform", "xgDagMesh")
-        non_dagnode = None
-        if dagnode.xgnode_type not in dagtypes:
-            non_dagnode = dagnode
-        else:
-            for chnode in children:
-                if chnode.xgnode_type not in dagtypes:
-                    non_dagnode = chnode
-                    break
-        if non_dagnode is not None:
-            raise ValueError(f"cannot add dag node, {non_dagnode!r} isn't a dag node")
+        for node in (dagnode, *children):
+            if node.xgnode_type not in ("xgDagTransform", "xgDagMesh"):
+                raise TypeError(f"can't add {node!r} to DAG, it isn't a dag node")
+        for node in (dagnode, *children):
+            if node not in self.preadded_nodes.values():
+                raise ValueError(
+                    f"can't add {node!r} to DAG, it hasn't been pre-added yet"
+                )
 
         # add nodes to the DAG
-        self._dag[dagnode] = children
+        if dagnode in self._dag:
+            new_children = (c for c in children if c not in self._dag[dagnode])
+            self._dag[dagnode].extend(new_children)
+        else:
+            self._dag[dagnode] = list(children)
