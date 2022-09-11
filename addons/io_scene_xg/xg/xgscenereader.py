@@ -268,6 +268,10 @@ class XgSceneReader:
                     node.append_inputattrib(token, inputNode, outputAttrib)
                     dbg_propval = f"{inputNode}, {outputAttrib}"
 
+                elif token == "":
+                    token = self._read_pstr()
+                    continue
+
                 # encountered unknown property or input attribute
                 else:
                     raise XgReadError(
