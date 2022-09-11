@@ -136,12 +136,6 @@ class Vertices(NamedTuple):
     texcoords: Collection[Tuple[float, float]]
 
 
-class InputAttribute:
-    # TODO contains nodename (or node?) and outputtype
-    #  uhhh should I also include the inputattrib type somehow? hell idk
-    pass
-
-
 class XgBaseNode:
     """base class for all XG node types. A single node of an XG scene graph"""
 
@@ -266,22 +260,30 @@ class XgBaseNode:
 class XgBgGeometry(XgBaseNode):
     density: float
     vertices: Vertices
-    inputGeometry: Collection[InputAttribute]
+    inputGeometry: Collection[
+        Union[
+            "XgEnvelope",
+            "XgVertexInterpolator",
+            "XgNormalInterpolator",
+            "XgTexCoordInterpolator",
+            "XgShapeInterpolator",
+        ]
+    ]
 
 
 class XgBgMatrix(XgBaseNode):
     position: Tuple[float, float, float]
     rotation: Tuple[float, float, float, float]
     scale: Tuple[float, float, float]
-    inputPosition: Collection[InputAttribute]
-    inputRotation: Collection[InputAttribute]
-    inputScale: Collection[InputAttribute]
-    inputParentMatrix: Collection[InputAttribute]
+    inputPosition: Collection["XgVec3Interpolator"]
+    inputRotation: Collection["XgQuatInterpolator"]
+    inputScale: Collection["XgVec3Interpolator"]
+    inputParentMatrix: Collection["XgBgMatrix"]
 
 
 class XgBone(XgBaseNode):
     restMatrix: Tuple[(float,) * 16]  # yes, 16 floats
-    inputMatrix: Collection[InputAttribute]
+    inputMatrix: Collection["XgBgMatrix"]
 
 
 class XgDagMesh(XgBaseNode):
@@ -295,20 +297,20 @@ class XgDagMesh(XgBaseNode):
     triListCount: int
     triListData: Collection[int]
     cullFunc: int
-    inputGeometry: Collection[InputAttribute]
-    inputMaterial: Collection[InputAttribute]
+    inputGeometry: Collection["XgBgGeometry"]
+    inputMaterial: Collection[Union["XgMaterial", "XgMultiPassMaterial"]]
 
 
 class XgDagTransform(XgBaseNode):
-    inputMatrix: Collection[InputAttribute]
+    inputMatrix: Collection["XgBgMatrix"]
 
 
 class XgEnvelope(XgBaseNode):
     startVertex: int
     weights: Tuple[Tuple[float, float, float, float], ...]
     vertexTargets: Collection[Tuple[int, ...]]
-    inputMatrix1: Collection[InputAttribute]
-    inputGeometry: Collection[InputAttribute]
+    inputMatrix1: Collection["XgBone"]
+    inputGeometry: Collection["XgBgGeometry"]
 
 
 class XgMaterial(XgBaseNode):
@@ -320,11 +322,11 @@ class XgMaterial(XgBaseNode):
     textureEnv: int
     uTile: int
     vTile: int
-    inputTexture: Collection[InputAttribute]
+    inputTexture: Collection["XgTexture"]
 
 
 class XgMultiPassMaterial(XgBaseNode):
-    inputMaterial: Collection[InputAttribute]
+    inputMaterial: Collection["XgMaterial"]
 
 
 class XgNormalInterpolator(XgBaseNode):
@@ -332,14 +334,14 @@ class XgNormalInterpolator(XgBaseNode):
     times: Collection[float]
     keys: Collection[Collection[Tuple[float, float, float]]]
     targets: Collection[int]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 class XgQuatInterpolator(XgBaseNode):
     type: int
     times: Collection[float]
     keys: Collection[Tuple[float, float, float, float]]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 class XgShapeInterpolator(XgBaseNode):
@@ -347,7 +349,7 @@ class XgShapeInterpolator(XgBaseNode):
     times: Collection[float]
     keys: Collection[Vertices]
     targets: Collection[int]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 class XgTexCoordInterpolator(XgBaseNode):
@@ -355,7 +357,7 @@ class XgTexCoordInterpolator(XgBaseNode):
     times: Collection[float]
     keys: Collection[Collection[Tuple[float, float]]]
     targets: Collection[int]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 class XgTexture(XgBaseNode):
@@ -372,7 +374,7 @@ class XgVec3Interpolator(XgBaseNode):
     type: int
     times: Collection[float]
     keys: Collection[Tuple[float, float, float]]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 class XgVertexInterpolator(XgBaseNode):
@@ -380,7 +382,7 @@ class XgVertexInterpolator(XgBaseNode):
     times: Collection[float]
     keys: Collection[Collection[Tuple[float, float, float]]]
     targets: Collection[int]
-    inputTime: Collection[InputAttribute]
+    inputTime: Collection["XgTime"]
 
 
 _nodeclasses = (
