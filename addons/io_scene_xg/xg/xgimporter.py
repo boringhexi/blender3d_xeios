@@ -119,10 +119,15 @@ class XgImporter:
         self._xgscene = xgscene
         self._texturedir = texturedir
         self._xganimseps = xganimseps
-        self._import_textures = texturedir is not None
-        self._import_animations = xganimseps is not None
         self._bl_name = bl_name
         self.warnings = []
+
+        class ImporterOptions:
+            def __init__(self):
+                self.import_textures = texturedir is not None
+                self.import_animations = xganimseps is not None
+
+        self.options = ImporterOptions()
 
         if texturedir is None:
             self.warn("No texture directory provided, textures will not be imported")
@@ -268,7 +273,7 @@ class XgImporter:
             self._load_pose()
 
         # 7) Load animations
-        if self._import_animations:
+        if self.options.import_animations:
             self._load_animations()
             pass
 
@@ -513,7 +518,7 @@ class XgImporter:
                             # Look for a likely PNG in the same dir based on texnode.url
                             texnode = matnode.inputTexture[0]
                             imagepath = _url_to_png(texnode.url, self._texturedir)
-                            if imagepath is not None and self._import_textures:
+                            if imagepath is not None and self.options.import_textures:
                                 # load it, and set it as the texture's image
                                 bpyimage = bpy.data.images.load(
                                     imagepath, check_existing=True
@@ -522,7 +527,7 @@ class XgImporter:
                                 # create a placeholder if we tried to import a texture
                                 # and failed, or if we're not importing textures at all.
                                 # but only warn if we tried and failed
-                                if self._import_textures and imagepath is None:
+                                if self.options.import_textures and imagepath is None:
                                     self.warn(
                                         "no suitable PNG file was found for texture "
                                         f"{texnode.url!r}, creating placeholder instead"
