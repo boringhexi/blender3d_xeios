@@ -127,7 +127,12 @@ class XgImporter:
                 self.import_textures = texturedir is not None
                 self.import_animations = xganimseps is not None
 
+        class ImporterDebugOptions:
+            def __init__(self):
+                self.correct_mesh_axes = False
+
         self.options = ImporterOptions()
+        self.debugoptions = ImporterDebugOptions()
 
         if texturedir is None:
             self.warn("No texture directory provided, textures will not be imported")
@@ -622,27 +627,25 @@ class XgImporter:
             # # Populate Blender mesh with vertices and faces # #
             # scaling and axis correction from XG to Blender:
             gis = self._global_import_scale
-            vertcoords_corrected = (
-                (-x * gis, -z * gis, y * gis) for x, y, z in dagmeshverts.coords
-            )
-            # TODO temporary override, uncorrected mesh go
-            vertcoords_corrected = (
-                (x * gis, y * gis, z * gis) for x, y, z in dagmeshverts.coords
-            )
-            tri_indices = self._tri_indices_from_dagmesh(dagmeshnode)
-            # TODO optimization?: x3d addon culls unused verts if there are like
-            #  >=2x as many total verts as used ones (& culls colors/texcoords to match)
-            #  at the least, can remove before first and after last vert index
-            #  (...much like in my CMB addon, sort of)
-            #  don't forget to make sure vertex groups work with it, too
-            # If it ever becomes necessary to replace from_pydata, take a look at
-            # x3d addon's importMesh_IndexedTriangleSet
-            bpymeshdata.from_pydata(tuple(vertcoords_corrected), [], tri_indices)
+            if self.debugoptions.correct_mesh_axes:
+                bpyvertcoords = [
+                    (x * gis, z * gis, y * gis) for x, y, z in dagmeshverts.coords
+                ]
+            else:
+                bpyvertcoords = [
+                    (x * gis, y * gis, z * gis) for x, y, z in dagmeshverts.coords
+                ]
+            bpytriindices = self._tri_indices_from_dagmesh(dagmeshnode)
+            bpymeshdata.from_pydata(bpyvertcoords, [], bpytriindices)
 
             # # Load normals # #
             if dagmeshverts.normals:
+                if self.debugoptions.correct_mesh_axes:
+                    bpynormals = [(x, z, y) for x, y, z in dagmeshverts.normals]
+                else:
+                    bpynormals = dagmeshverts.normals
+                bpymeshdata.normals_split_custom_set_from_vertices(bpynormals)
                 bpymeshdata.use_auto_smooth = True
-                bpymeshdata.normals_split_custom_set_from_vertices(dagmeshverts.normals)
 
             # # Load vertex colors # #
             # TODO "Deprecated, use color_attributes instead"
@@ -690,7 +693,7 @@ class XgImporter:
     ) -> List[Tuple[int, int, int]]:
         """return a list of triangles (vert indices) from dagmeshnode
 
-        (helper method used by _load_meshes) #TODO can label other methods this way
+        (helper method used by _load_meshes)
 
         :param dagmeshnode: XgDagMesh containing the triangles
         :param fix_winding_order: if True, reverse triangle winding order where
@@ -717,7 +720,9 @@ class XgImporter:
         trilists = _tridata_to_prims(dagmeshnode.triListData, dagmeshnode.primType)
         for trilist in trilists:
             tris = (trilist[i : i + 3] for i in range(0, len(trilist) - 2, 3))
-            if fix_winding_order:
+            # trilist winding order needs to be reversed (unless the mesh has been axis-
+            # corrected, in which case the current winding order is already correct)
+            if not self.debugoptions.correct_mesh_axes and fix_winding_order:
                 tris = [[tri[2], tri[1], tri[0]] for tri in tris]
             triangles.extend(tris)
 
@@ -735,9 +740,12 @@ class XgImporter:
         for tristrip in tristrips:
             tristrip_tris = []
             for i in range(len(tristrip) - 2):
-                tri = tristrip[i : i + 3]
+                tri = tuple(tristrip[i : i + 3])
                 # reverse winding of odd-numbered triangles
-                if i % 2 == 1:
+                if not self.debugoptions.correct_mesh_axes and i % 2 == 1:
+                    tri = (tri[1], tri[0], tri[2])
+                # (or do the opposite if this is an axis-corrected mesh)
+                elif self.debugoptions.correct_mesh_axes and i % 2 == 0:
                     tri = (tri[1], tri[0], tri[2])
                 tristrip_tris.append(tri)
 
@@ -757,46 +765,41 @@ class XgImporter:
                     bl_facenormal = mathutils.geometry.normal(tri_dagcoords)
                     # calculate the difference between the two
                     normals_diff = tri_average_dagnormal.angle(bl_facenormal, None)
-                    if normals_diff is not None:
-                        normals_alldiffs.append(normals_diff)
-                    else:  # unable to calculate a difference between normals
-                        # TODO test, see if any warnings still occur. If not, remove
-                        #  this check
-                        #  Known examples seen so far (known examples are ignored/will
-                        #  show no warning):
-                        #  - zero-area triangle resulting from 2 or more coordinates
-                        #    being identical
-                        is_zero_area_triangle = (
-                            mathutils.geometry.area_tri(*tri_dagcoords) == 0
-                        )
-                        is_known_example = is_zero_area_triangle
-                        if not is_known_example:
-                            self.warn(
-                                f"unusable normal from xg: {tri_average_dagnormal} and "
-                                f"bl:{bl_facenormal} from {tri_dagcoords}"
-                            )
-                # If the model's normals generally disagree with Blender's calculated
-                # normals...
+                    if normals_diff is None:
+                        # unable to calculate a difference between normals
+                        # e.g. degenerate triangle with 0 area
+                        continue
+                    normals_alldiffs.append(normals_diff)
+
+                # Go through all the normal differences and check:
                 if normals_alldiffs:
                     avg_normal_diff = sum(normals_alldiffs) / len(normals_alldiffs)
-                    if avg_normal_diff > radians(90):
+                    normals_disagree = avg_normal_diff > radians(90)
+
+                    # If the tristrip's normals generally disagree with Blender's
+                    # calculated normals...
+                    if not self.debugoptions.correct_mesh_axes and normals_disagree:
                         # ...reverse the winding order.
-                        tristrip_tris = (
-                            (tri[1], tri[0], tri[2]) for tri in tristrip_tris
-                        )
+                        tristrip_tris = ((t[1], t[0], t[2]) for t in tristrip_tris)
+
+                    # (or do the opposite if this is an axis-corrected mesh)
+                    elif self.debugoptions.correct_mesh_axes and not normals_disagree:
+                        tristrip_tris = ((t[1], t[0], t[2]) for t in tristrip_tris)
 
             triangles.extend(tristrip_tris)
 
         # Triangle fans:
-        # TODO not tested, don't know if any existing models use trifans
+        # TODO untested, as no known models use trifans
         trifans = _tridata_to_prims(dagmeshnode.triFanData, dagmeshnode.primType)
         for trifan in trifans:
             tris = (
                 (trifan[0], trifan[i + 1], trifan[i + 2])
                 for i in range(len(trifan) - 2)
             )
-            if fix_winding_order:
-                tris = [[tri[2], tri[1], tri[0]] for tri in tris]
+            # trifan winding order needs to be reversed (unless the mesh has been axis-
+            # corrected, in which case the current winding order is already correct)
+            if not self.debugoptions.correct_mesh_axes and fix_winding_order:
+                tris = [(tri[2], tri[1], tri[0]) for tri in tris]
             triangles.extend(tris)
 
         return triangles
@@ -1140,7 +1143,7 @@ class XgImporter:
                         # # insert your keyframes
                         # context.user_preferences.edit.keyframe_new_interpolation_type
                         #  = old_interp_type
-                # TODO Temporary for anim comparison
+                # TODO Temporarily lengthen all animations, for anim comparison
                 bpy_nla_strip.scale = 1.8
 
     def _load_pose(self):
