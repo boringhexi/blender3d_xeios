@@ -7,9 +7,9 @@ from typing import AnyStr, Collection, Dict, List, Optional, Sequence, Tuple, Un
 
 import bpy
 import mathutils
-from bpy.types import Action, EditBone
+from bpy.types import Action
 from bpy_extras.io_utils import unpack_list
-from mathutils import Euler, Matrix, Quaternion, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from .xganimsep import AnimSepEntry, read_animseps
 from .xgerrors import XgImportError
@@ -129,7 +129,8 @@ class XgImporter:
 
         class ImporterDebugOptions:
             def __init__(self):
-                self.correct_mesh_axes = False
+                self.correct_mesh_axes = True
+                self.correct_restpose_axes = True
 
         self.options = ImporterOptions()
         self.debugoptions = ImporterDebugOptions()
@@ -810,45 +811,40 @@ class XgImporter:
         bpyarmobj = self._get_armature(editmode=True)
 
         for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
+            # get the original rest pose (position, rotation, and scale)
             rmtx = bonenode.restMatrix
             rmatrixti = Matrix((rmtx[:4], rmtx[4:8], rmtx[8:12], rmtx[12:]))
             rmatrixti.transpose()
             rmatrixti.invert()
-            rpos, rrot, rscl = rmatrixti.decompose()
+            restpos, restrot, restscl = rmatrixti.decompose()
 
-            # rest position axis correction, scaling
-            posx, posy, posz = rpos
-            rpos2 = Vector((-posx, -posz, posy)) * self._global_import_scale
-            rpos2m = Matrix.Translation(rpos2)
+            # get the blender edit bone we'll be setting the rest pose for
+            bpyeditbone = bpyarmobj.data.edit_bones[bpybonename]
 
-            # rest rotation axis correction
-            rotx, roty, rotz = rrot.to_euler("ZYX")
-            rrot2 = Euler([rotx + radians(90), -roty, -rotz], "ZYX")
-            # this adjustment makes bones line up much nicer e.g. PUMA_N.XG
-            nice_bones = Matrix(((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.0)))
-            rrot2m = rrot2.to_matrix() @ nice_bones
-
-            # rest scale axis correction
-            # XG's rest poses can have rest scale, but Blender's can't. So later, use
-            # rest scale to fix scale anims so they'll work without a rest scale
-            sclx, scly, sclz = rscl
-            rscl2 = Vector((-sclx, -sclz, scly))
-            rscl2 = Vector((sclx, scly, sclz))  # TODO uncorrected for now
-            self._mappings.bpybonename_restscale[bpybonename] = rscl2
-
-            # set this bone's rest pose
-            bpyebone = bpyarmobj.data.edit_bones[bpybonename]
-            bpyebone.matrix = rpos2m @ rrot2m.to_4x4()
-
-            uncorrected = (
-                Matrix.Translation(rpos * self._global_import_scale)
-                @ rrot.to_matrix().to_4x4()
+            uncorrected_bpyeditbone_matrix = (
+                Matrix.Translation(restpos * self._global_import_scale)
+                @ restrot.to_matrix().to_4x4()
             )
-            bpyebone.matrix = (
-                uncorrected  # TODO temporary override, test uncorrected rest pose
-            )
-            # bpyebone.matrix = Matrix()
-            bpyebone.length = BONE_SIZE
+
+            if self.debugoptions.correct_restpose_axes:
+                # set axis-corrected rest pose
+                axis_correction = (
+                    Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+                    @ Matrix.Rotation(radians(180), 4, "Z") @
+                    Matrix.Rotation(radians(90), 4, "X")
+                )
+                bpyeditbone.matrix = axis_correction @ uncorrected_bpyeditbone_matrix
+            else:
+                # set rest pose without correcting the axes
+                bpyeditbone.matrix = uncorrected_bpyeditbone_matrix
+
+            # rest scale: save for later
+            # XG's rest poses can have rest scale, but Blender's can't. So later, we'll
+            # use rest scale to adjust the pose scale, thereby achieving the same effect
+            # (axis correction will happen then, not now)
+            self._mappings.bpybonename_restscale[bpybonename] = restscl
+
+            bpyeditbone.length = BONE_SIZE
 
     def _load_animations(self) -> None:
         """create actions, load animation data from the XG scene into Blender bones"""
