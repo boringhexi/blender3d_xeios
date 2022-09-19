@@ -104,7 +104,7 @@ class XgImporter:
         texturedir: Optional[AnyStr] = None,
         xganimseps: Sequence[AnimSepEntry] = None,
         bl_name: str = "UNNAMED",
-        global_import_scale: Optional[float] = None,
+        global_import_scale: float = 1.0,
     ):
         """create an XgImporter to import the XgScene into Blender
 
@@ -120,6 +120,7 @@ class XgImporter:
         self._texturedir = texturedir
         self._xganimseps = xganimseps
         self._bl_name = bl_name
+        self._global_import_scale = global_import_scale
         self.warnings = []
 
         class ImporterOptions:
@@ -143,7 +144,7 @@ class XgImporter:
         self._bpyemptyobj = None
         self._bpyarmatureobj = None
 
-        # shortcut for the long function to add a created Blender object to the scene
+        # shortcut for the function that adds a created Blender object to the scene
         self._link_to_blender_func = None
 
         class Mappings:
@@ -158,23 +159,6 @@ class XgImporter:
                 self.bpybonename_restscale: Dict[str, Vector] = dict()
 
         self._mappings = Mappings()
-
-        # TODO Not yet used:
-        if global_import_scale is None:
-            global_import_scale = 1
-        self._global_import_scale = global_import_scale
-        gis = global_import_scale
-        # matrix effect: rotates 90deg about X, scales -1.0 across X, scales by gis.
-        #   In other words, it swaps from XG's coordinate system to Blender's (and
-        #   scales as desired).
-        self._global_import_mtx = Matrix(
-            (
-                [-gis, 0.00, 0.0, 0.0],
-                [0.00, 0.00, gis, 0.0],
-                [0.00, -gis, 0.0, 0.0],
-                [0.00, 0.00, 0.0, 1.0],
-            )
-        )
 
     @classmethod
     def from_path(cls, xgscenepath: str, **kwargs) -> "XgImporter":
@@ -321,7 +305,6 @@ class XgImporter:
                             bpymeshobj.parent = self._get_armature(mode="POSE")
                             bpymeshobj.parent_type = "BONE"
                             bpymeshobj.parent_bone = bpybone_name
-                            bpy.context.view_layer.update()  # TODO can't this wait?
                             bpymeshobj.matrix_world = Matrix()
 
                 # if bone was not created:
@@ -425,8 +408,6 @@ class XgImporter:
             # TODO temporary armature view stuff for my convenience
             bpyarmobj.data.show_axes = True
             bpyarmobj.show_in_front = True
-            # TODO also, maybe the mesh should be rotated in such a way that the bone
-            #  position that gives a resting pose will be something more intuitive
 
             if bpyeditbone_name != bgmatrixnode.xgnode_name:
                 self.warn(
@@ -495,13 +476,7 @@ class XgImporter:
                         bpymat = bpy.data.materials.new(name=matnode.xgnode_name)
                         self._mappings.regmatnode_bpymat[matnode] = bpymat
 
-                        # TODO init its texture, too.
                         if hasattr(matnode, "inputTexture"):
-
-                            # TODO yeah, start thinking about doing init and loading at
-                            #  the same time...
-                            #  if not for anything else, then at least for this bs
-
                             # set up material nodes to use a texture
                             bpymat.use_nodes = True
                             bsdf = bpymat.node_tree.nodes["Principled BSDF"]
