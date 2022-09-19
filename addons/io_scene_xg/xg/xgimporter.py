@@ -318,11 +318,7 @@ class XgImporter:
                     for bpymeshobj in bpymeshobjs:
                         # skip meshes that were not created
                         if bpymeshobj is not None:
-                            bpymeshobj.parent = self._get_armature(mode="EDIT")
-                            # TODO sloppy rn, but you must be in Pose mode when setting
-                            #  a object bone parent, else you get those annoying errors
-                            #  in the console
-                            bpy.ops.object.mode_set(mode="POSE")
+                            bpymeshobj.parent = self._get_armature(mode="POSE")
                             bpymeshobj.parent_type = "BONE"
                             bpymeshobj.parent_bone = bpybone_name
                             bpy.context.view_layer.update()  # TODO can't this wait?
