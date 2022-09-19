@@ -1150,6 +1150,8 @@ class XgImporter:
         likely to get overwritten by an animation, but sometimes is not (e.g. Noren's
         feet are un-animated and need to be posed this way to match the animation)
         """
+        bpybonename_restscale = self._mappings.bpybonename_restscale
+
         # TODO sloppy way of entering pose mode, maybe add to self._get_armature()
         bpyarmobj = self._get_armature()
         bpy.ops.object.mode_set(mode="OBJECT")
@@ -1157,37 +1159,43 @@ class XgImporter:
         bpy.ops.object.mode_set(mode="POSE")
 
         for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
-            if not bonenode.inputMatrix:
-                self.warn(" == skipping bone because it has no inputMatrix ==")
+            if not hasattr(bonenode, "inputMatrix") or not bonenode.inputMatrix:
                 continue
+
+            # get the Blender posebone to be posed + the xgBgMatrix containing the pose
             bpyposebone = bpyarmobj.pose.bones[bpybonename]
             bpyposebone.rotation_mode = "QUATERNION"
-            # TODO maybe use edit_bone.matrix... or maybe that will end up taking after
-            #  this for reasons of bones missing errors
-            rmtx = bonenode.restMatrix
-            restmatrix = Matrix((rmtx[:4], rmtx[4:8], rmtx[8:12], rmtx[12:]))
-            restmatrix.transpose()
-            restmatrix.invert()
+            bgmatrixnode = bonenode.inputMatrix[0]
 
-            # print(bpybonename)
-            # print(bpyposebone.matrix.transposed())
-            # print(restmatrix.inverted())
-            # matrices should be about equal
-
-            matrixnode = bonenode.inputMatrix[0]
+            # calculate pose position
             posmtx = Matrix.Translation(
-                (c * self._global_import_scale for c in matrixnode.position)
+                (c * self._global_import_scale for c in bgmatrixnode.position)
             )
-            rotx, roty, rotz, rotw = matrixnode.rotation
-            rotmtx = Quaternion((rotw, rotx, roty, rotz)).to_matrix().to_4x4()
-            sclx, scly, sclz = matrixnode.scale
-            rsclx, rscly, rsclz = self._mappings.bpybonename_restscale.get(
-                bpybonename, (1, 1, 1)
-            )
-            sclmtx_x = Matrix.Scale(sclx / rsclx, 4, (1, 0, 0))
-            sclmtx_y = Matrix.Scale(scly / rscly, 4, (0, 1, 0))
-            sclmtx_z = Matrix.Scale(sclz / rsclz, 4, (0, 0, 1))
 
+            # calculate pose rotation
+            rotx, roty, rotz, rotw = bgmatrixnode.rotation
+            rotquat = Quaternion((rotw, rotx, roty, rotz))
+            rotquat_axis, rotquat_angle = rotquat.to_axis_angle()
+            # (important part is to negate the angle of the axis-angle)
+            rotquat = Quaternion(rotquat_axis, -rotquat_angle)
+            rotmtx = rotquat.to_matrix().to_4x4()
+
+            # calculate pose scale
+            sclx, scly, sclz = bgmatrixnode.scale
+            # Back when we were setting the rest pose, we couldn't set a rest scale.
+            # So if this bone was supposed to have a rest scale, now we take that rest
+            # scale and apply the inverse to this bone's pose scale, thereby achieving
+            # the same effect.
+            if bpybonename in bpybonename_restscale:
+                restsclx, restscly, restsclz = bpybonename_restscale[bpybonename]
+                sclx = sclx / restsclx
+                scly = scly / restscly
+                sclz = sclz / restsclz
+            sclmtx_x = Matrix.Scale(sclx, 4, (1, 0, 0))
+            sclmtx_y = Matrix.Scale(scly, 4, (0, 1, 0))
+            sclmtx_z = Matrix.Scale(sclz, 4, (0, 0, 1))
+
+            # combine position/rotation/scale and apply to the posebone
             pose_matrix = posmtx @ rotmtx @ sclmtx_x @ sclmtx_y @ sclmtx_z
             bpyposebone.matrix = pose_matrix
 
