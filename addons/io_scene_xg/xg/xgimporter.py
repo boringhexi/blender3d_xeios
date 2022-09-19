@@ -207,10 +207,11 @@ class XgImporter:
             bpyemptyobj = self._bpyemptyobj
         return bpyemptyobj
 
-    def _get_armature(self, editmode=False) -> bpy.types.Object:
+    def _get_armature(self, mode: Optional[str] = None) -> bpy.types.Object:
         """return Blender armature object, will be created if it doesn't exist yet
 
-        :param editmode: if True, put Blender in Edit mode for the armature
+        :param mode: one of "OBJECT", "EDIT", or "POSE", the mode to set Blender to,
+            or None to leave it in the same mode as before.
         :return: Blender armature object
         """
         if self._bpyarmatureobj is None:
@@ -221,18 +222,16 @@ class XgImporter:
             self._link_to_blender_func(bpyarmobj)
             self._bpyarmatureobj = bpyarmobj
             bpyarmobj.parent = self._get_empty()  # parent armature to the Empty
-
         else:
+            # retrieve existing Blender armature
             bpyarmobj = self._bpyarmatureobj
-        if editmode and not (
-            bpy.context.mode == "EDIT" and bpy.context.active_object == bpyarmobj
-        ):
-            # prepare for armature editing (make active and enter Edit mode)
-            # TODO may have to set to Object mode first,
-            #   test by starting import from Pose mode
+
+        # set the Blender mode with the armature as the active object
+        if mode:
             bpy.context.view_layer.objects.active = bpyarmobj
-            bpy.ops.object.mode_set(mode="EDIT")
-        return self._bpyarmatureobj
+            bpy.ops.object.mode_set(mode=mode)
+
+        return bpyarmobj
 
     def import_xgscene(self) -> None:
         """import the XgScene into Blender
@@ -319,7 +318,7 @@ class XgImporter:
                     for bpymeshobj in bpymeshobjs:
                         # skip meshes that were not created
                         if bpymeshobj is not None:
-                            bpymeshobj.parent = self._get_armature(editmode=True)
+                            bpymeshobj.parent = self._get_armature(mode="EDIT")
                             # TODO sloppy rn, but you must be in Pose mode when setting
                             #  a object bone parent, else you get those annoying errors
                             #  in the console
@@ -376,7 +375,7 @@ class XgImporter:
         if bonenode not in bonename_mapping:
             # initialize new Blender bone
             if hasattr(bonenode, "inputMatrix"):
-                bpyarmobj = self._get_armature(editmode=True)
+                bpyarmobj = self._get_armature(mode="EDIT")
                 bpybone_name = self._init_bone_from_bgmatrixnode(
                     bonenode.inputMatrix[0]
                 )
@@ -418,7 +417,7 @@ class XgImporter:
         if bgmatrixnode not in bgmatrix_mapping:
             # create new Blender bone in armature
 
-            bpyarmobj = self._get_armature(editmode=True)
+            bpyarmobj = self._get_armature(mode="EDIT")
             bpyeditbone = bpyarmobj.data.edit_bones
             bpyeditbone = bpyarmobj.data.edit_bones.new(name=bgmatrixnode.xgnode_name)
             bpyeditbone_name = bpyeditbone.name
@@ -589,7 +588,7 @@ class XgImporter:
                     self._init_bone_hierarchy_from_bonenode(envnode.inputMatrix1[0])
 
                 # make armature the parent of this mesh
-                bpyarmobj = self._get_armature(editmode=True)
+                bpyarmobj = self._get_armature(mode="EDIT")
                 bpyarmmod = bpymeshobj.modifiers.new(bpyarmobj.name, "ARMATURE")
                 bpyarmmod.object = bpyarmobj
                 bpymeshobj.parent = bpyarmobj
@@ -808,7 +807,7 @@ class XgImporter:
     def _load_bones(self):
         """load bone data from the XG scene into the initialized Blender bones"""
         BONE_SIZE = 0.25  # TODO there is a better way, eventually
-        bpyarmobj = self._get_armature(editmode=True)
+        bpyarmobj = self._get_armature(mode="EDIT")
 
         for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
             # get the original rest pose (position, rotation, and scale)
@@ -830,8 +829,8 @@ class XgImporter:
                 # set axis-corrected rest pose
                 axis_correction = (
                     Matrix.Scale(-1, 4, Vector((1, 0, 0)))
-                    @ Matrix.Rotation(radians(180), 4, "Z") @
-                    Matrix.Rotation(radians(90), 4, "X")
+                    @ Matrix.Rotation(radians(180), 4, "Z")
+                    @ Matrix.Rotation(radians(90), 4, "X")
                 )
                 bpyeditbone.matrix = axis_correction @ uncorrected_bpyeditbone_matrix
             else:
@@ -858,7 +857,7 @@ class XgImporter:
             return
         # TODO need editmode so it can get the edit_bone matrices. But I may end up
         #  storing that rest PRS stuff in a mapping so that no editmode is needed
-        bpyarmobj = self._get_armature(editmode=True)
+        bpyarmobj = self._get_armature(mode="EDIT")
         bpyarmobj.animation_data_create()
 
         # create empty Blender animations in advance
@@ -1151,12 +1150,7 @@ class XgImporter:
         feet are un-animated and need to be posed this way to match the animation)
         """
         bpybonename_restscale = self._mappings.bpybonename_restscale
-
-        # TODO sloppy way of entering pose mode, maybe add to self._get_armature()
-        bpyarmobj = self._get_armature()
-        bpy.ops.object.mode_set(mode="OBJECT")
-        bpy.context.view_layer.objects.active = bpyarmobj
-        bpy.ops.object.mode_set(mode="POSE")
+        bpyarmobj = self._get_armature(mode="POSE")
 
         for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
             if not hasattr(bonenode, "inputMatrix") or not bonenode.inputMatrix:
