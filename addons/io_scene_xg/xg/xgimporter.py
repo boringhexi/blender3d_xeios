@@ -132,6 +132,7 @@ class XgImporter:
             def __init__(self):
                 self.correct_mesh_axes = False
                 self.correct_restpose_axes = False
+                self.correct_pose_axes = False
 
         self.options = ImporterOptions()
         self.debugoptions = ImporterDebugOptions()
@@ -264,7 +265,6 @@ class XgImporter:
         # 7) Load animations
         if self.options.import_animations:
             self._load_animations()
-            pass
 
         # back to object mode
         if bpy.context.mode != "OBJECT":
@@ -781,31 +781,38 @@ class XgImporter:
         bpyarmobj = self._get_armature(mode="EDIT")
 
         for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
-            # get the original rest pose (position, rotation, and scale)
+            # get the original rest pose components (position, rotation, and scale)
             rmtx = bonenode.restMatrix
             rmatrixti = Matrix((rmtx[:4], rmtx[4:8], rmtx[8:12], rmtx[12:]))
             rmatrixti.transpose()
             rmatrixti.invert()
             restpos, restrot, restscl = rmatrixti.decompose()
 
-            # get the blender edit bone we'll be setting the rest pose for
+            # get the Blender edit bone we'll be setting the rest pose for
             bpyeditbone = bpyarmobj.data.edit_bones[bpybonename]
 
-            uncorrected_bpyeditbone_matrix = (
-                Matrix.Translation(restpos * self._global_import_scale)
-                @ restrot.to_matrix().to_4x4()
-            )
+            # combine position/rotation into a Blender rest pose
+            restpos_matrix = Matrix.Translation(restpos * self._global_import_scale)
+            restrot_matrix = restrot.to_matrix().to_4x4()
+            uncorrected_bpyeditbone_matrix = restpos_matrix @ restrot_matrix
 
             if self.debugoptions.correct_restpose_axes:
-                # set axis-corrected rest pose
-                axis_correction = (
-                    Matrix.Scale(-1, 4, Vector((1, 0, 0)))
-                    @ Matrix.Rotation(radians(180), 4, "Z")
-                    @ Matrix.Rotation(radians(90), 4, "X")
+                # calculate and apply the axis-corrected rest pose
+                correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+                # correction_scalex is used twice (applying and removing scale) to
+                # "mirror" bone rotations across the Y axis.
+                # https://math.stackexchange.com/questions/3840143
+                correction_rotxz = Matrix.Rotation(
+                    radians(180), 4, "Z"
+                ) @ Matrix.Rotation(radians(90), 4, "X")
+                bpyeditbone.matrix = (
+                    correction_rotxz
+                    @ correction_scalex
+                    @ uncorrected_bpyeditbone_matrix
+                    @ correction_scalex
                 )
-                bpyeditbone.matrix = axis_correction @ uncorrected_bpyeditbone_matrix
             else:
-                # set rest pose without correcting the axes
+                # apply the uncorrected rest pose
                 bpyeditbone.matrix = uncorrected_bpyeditbone_matrix
 
             # rest scale: save for later
@@ -1160,9 +1167,27 @@ class XgImporter:
             sclmtx_y = Matrix.Scale(scly, 4, (0, 1, 0))
             sclmtx_z = Matrix.Scale(sclz, 4, (0, 0, 1))
 
-            # combine position/rotation/scale and apply to the posebone
+            # combine position/rotation/scale into a Blender pose
             pose_matrix = posmtx @ rotmtx @ sclmtx_x @ sclmtx_y @ sclmtx_z
-            bpyposebone.matrix = pose_matrix
+
+            if self.debugoptions.correct_pose_axes:
+                # calculate and apply the axis-corrected pose
+                correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+                # correction_scalex is used twice (applying and removing scale) to
+                # "mirror" bone rotations across the Y axis.
+                # https://math.stackexchange.com/questions/3840143
+                correction_rotxz = Matrix.Rotation(
+                    radians(180), 4, "Z"
+                ) @ Matrix.Rotation(radians(90), 4, "X")
+                bpyposebone.matrix = (
+                    correction_rotxz
+                    @ correction_scalex
+                    @ pose_matrix
+                    @ correction_scalex
+                )
+            else:
+                # apply the uncorrected pose
+                bpyposebone.matrix = pose_matrix
 
     def warn(self, message: str) -> None:
         """print warning message to console, store in internal list of warnings"""
