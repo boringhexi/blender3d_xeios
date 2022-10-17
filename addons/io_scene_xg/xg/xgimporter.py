@@ -25,6 +25,12 @@ from .xgscene import (
 from .xgscenereader import XgSceneReader
 
 
+xg_to_blender_interp_type = {
+    Constants.InterpolationType.NONE: "CONSTANT",
+    Constants.InterpolationType.LINEAR: "LINEAR",
+}
+
+
 def _tridata_to_prims(tridata: Collection[int], primtype: int) -> List[Tuple[int, ...]]:
     """return a list of prims from tridata, each prim is a tuple of vertex indices
 
@@ -830,39 +836,42 @@ class XgImporter:
         #  final rest pose position. Maybe can get away with positioning its parents
         #  later...
 
-        animseps = self._xganimseps
-        if not animseps:
-            return
-        # TODO need editmode so it can get the edit_bone matrices. But I may end up
-        #  storing that rest PRS stuff in a mapping so that no editmode is needed
+        # we need the armature in editmode so that we can get the edit_bone matrices
         bpyarmobj = self._get_armature(mode="EDIT")
         bpyarmobj.animation_data_create()
+        has_animations = False
 
-        # create empty Blender animations in advance
-        num_digits = len(str(len(animseps) - 1))
-        anim_names = (f"{x:0{num_digits}}" for x in range(len(animseps)))
+        # Create blank Blender animations in advance, one for each animsep
+        animseps = self._xganimseps
+        anim_name_num_digits = len(str(len(animseps) - 1))
         nla_strips_by_idx = []
-        have_set_solo = False  # TODO temporary for animation comparison
-        for anim_name, animsep in zip(anim_names, animseps):
+        have_set_solo = False  # to set only the first animation to be played by itself
+        for anim_idx, animsep in enumerate(animseps):
+            # create Blender Action
+            # include model name in the Action name. Users can manually apply an Action
+            # to any armature, so we want to make it clear which armature should have it
+            prepend_model_name = f"{self._bl_name} - " if self._bl_name else ""
+            anim_name = f"{anim_idx:0{anim_name_num_digits}}"
+            bpyaction: Action = bpy.data.actions.new(f"{prepend_model_name}{anim_name}")
+            bpyaction.use_fake_user = True
+
+            # create Blender NLA track
             bpy_nla_track = bpyarmobj.animation_data.nla_tracks.new()
             bpy_nla_track.name = anim_name
-            bpyaction: Action = bpy.data.actions.new(anim_name)
-            bpyaction.use_fake_user = True
-            bpy_nla_strip = bpy_nla_track.strips.new(anim_name, 0, bpyaction)
-            bpy_nla_strip.action_frame_end = animsep.playback_length
-            nla_strips_by_idx.append(bpy_nla_strip)
-            # TODO temporary for animation comparison
-            if not have_set_solo:
+            if not have_set_solo:  # set only the first animation to play by itself
                 bpy_nla_track.is_solo = True
                 have_set_solo = True
-            # TODO also need to set NLA strips not to hold pose after animation ends
 
-        # populate empty animations with keyframes
+            # create Blender NLA strip
+            bpy_nla_strip = bpy_nla_track.strips.new(anim_name, 0, bpyaction)
+            bpy_nla_strip.name = anim_name  # because it didn't stick the first time
+            bpy_nla_strip.action_frame_end = animsep.playback_length
+            # bpy_nla_strip.extrapolation = "NOTHING"  # nope, looks bad when anim loops
+            nla_strips_by_idx.append(bpy_nla_strip)
+
         for matrixnode, bpybonename in self._mappings.xgbgmatrix_bpybonename.items():
-            # TODO need to account for times later, e.g. Flying O blinkenlights
-            if hasattr(matrixnode, "times"):
-                pass
 
+            # get the XG interpolators, they contain animation keyframe data
             pos_interpolator = (
                 matrixnode.inputPosition[0]
                 if hasattr(matrixnode, "inputPosition")
@@ -876,248 +885,141 @@ class XgImporter:
             scl_interpolator = (
                 matrixnode.inputScale[0] if hasattr(matrixnode, "inputScale") else None
             )
+            # if there is no animation data, skip this bone
+            if pos_interpolator is rot_interpolator is scl_interpolator is None:
+                continue
+            else:
+                has_animations = True
+
+            # get rest position, rotation, scale
             rest_matrix = bpyarmobj.data.edit_bones[bpybonename].matrix
             rest_pos = rest_matrix.to_translation()
             rest_rot = rest_matrix.to_quaternion()
             rest_scl = self._mappings.bpybonename_restscale.get(bpybonename)
 
-            for idx, animsep in enumerate(animseps):
-                animsep_keyframe_interval = int(animsep.keyframe_interval)
-                animsep_playback_length = int(animsep.playback_length)
-                animsep_start_keyframe = int(animsep.start_keyframe_idx)
-                animsep_end_keyframe = (
-                    animsep_start_keyframe
-                    + animsep_playback_length // animsep_keyframe_interval
+            # TODO need to account for times later, e.g. Flying O blinkenlights
+            if hasattr(matrixnode, "times"):
+                pass
+
+            # position keyframes
+            if pos_interpolator is not None:
+                # absolute position keyframes
+                poskeys = [
+                    Vector((x, y, z)) * self._global_import_scale
+                    for x, y, z in pos_interpolator.keys
+                ]
+                # from that, create relative position keyframes (relative to rest pose)
+                poskeydiffs = [v - rest_pos for v in poskeys]
+                rest_rot_inv = rest_rot.inverted()
+                for poskeydiff in poskeydiffs:
+                    poskeydiff.rotate(rest_rot_inv)
+                # add the relative keyframes to Blender
+                bpy_interp_type = xg_to_blender_interp_type[pos_interpolator.type]
+                bpy_data_path = f'pose.bones["{bpybonename}"].location'
+                self._add_keyframes(
+                    nla_strips_by_idx,
+                    bpy_data_path,
+                    poskeydiffs,
+                    animseps,
+                    bpy_interp_type,
                 )
-                animsep_framenums = range(
-                    0, animsep_playback_length + 1, animsep_keyframe_interval
+
+            # rotation keyframes
+            if rot_interpolator is not None:
+                # absolute rotation keyframes
+                rotkeys = [
+                    Quaternion((w, x, y, z)) for x, y, z, w in rot_interpolator.keys
+                ]
+                # from that, create relative rotation keyframes (relative to rest pose)
+                rotkeydiffs = [
+                    rest_rot.rotation_difference(abs_rot.inverted())
+                    for abs_rot in rotkeys
+                ]
+                if len(rotkeydiffs) > 1:
+                    for quat1, quat2 in zip(
+                            rotkeydiffs, rotkeydiffs[1:]
+                    ):
+                        quat2.make_compatible(quat1)
+                # add the relative keyframes to Blender
+                bpy_interp_type = xg_to_blender_interp_type[rot_interpolator.type]
+                bpy_data_path = f'pose.bones["{bpybonename}"].rotation_quaternion'
+                self._add_keyframes(
+                    nla_strips_by_idx,
+                    bpy_data_path,
+                    rotkeydiffs,
+                    animseps,
+                    bpy_interp_type,
                 )
-                bpy_nla_strip = nla_strips_by_idx[idx]
-                bpyaction = bpy_nla_strip.action
 
-                # XYZ position anims
-                if pos_interpolator is not None:
-                    # if False:
-                    #     poskeys_absolute = [Vector((-x, -z, y)) *
-                    #     self._global_import_scale for x, y, z in
-                    #     pos_interpolator.keys]
-                    poskeys_uncorrected_absolute = [
-                        Vector((x, y, z)) * self._global_import_scale
-                        for x, y, z in pos_interpolator.keys
+            # scale keyframes
+            if scl_interpolator is not None:
+                scl_keys = scl_interpolator.keys
+                # since Blender did not let us set a rest scale for this bone,
+                # we may need to adjust the pose scale accordingly
+                if rest_scl is not None:
+                    scl_keys = [
+                        (x / rest_scl.x, y / rest_scl.y, z / rest_scl.z)
+                        for x, y, z in scl_keys
                     ]
+                # add the keyframes to Blender
+                bpy_interp_type = xg_to_blender_interp_type[scl_interpolator.type]
+                bpy_data_path = f'pose.bones["{bpybonename}"].scale'
+                self._add_keyframes(
+                    nla_strips_by_idx,
+                    bpy_data_path,
+                    scl_keys,
+                    animseps,
+                    bpy_interp_type,
+                )
 
-                    # TODO rest rot affects pos diffs
-                    poskeys_uncorrected_diff = [
-                        v - rest_pos for v in poskeys_uncorrected_absolute
-                    ]
+        if not has_animations:
+            bpyarmobj.animation_data_clear()
 
-                    rest_rot_inv = rest_rot.copy()
-                    rest_rot_inv.invert()
-                    for poskeydiff in poskeys_uncorrected_diff:
-                        poskeydiff.rotate(rest_rot_inv)
+    def _add_keyframes(
+        self, nla_strips_by_idx, bpy_data_path, keys, animseps, bpy_interp_type
+    ) -> None:
+        """add keyframes from keys into the provided nla strips
 
-                    interp_type = pos_interpolator.type
-                    bpy_data_path = f'pose.bones["{bpybonename}"].location'
-                    # process each axis X=0,Y=1,Z=2 separately
-                    for axis_idx, axis_keys in enumerate(
-                        zip(*poskeys_uncorrected_diff)
-                    ):
-                        fcurve = bpyaction.fcurves.new(
-                            data_path=bpy_data_path, index=axis_idx
-                        )
-                        # only keyframes from this animsep
-                        animsep_axis_keys = tuple(
-                            axis_key
-                            for keyframe_idx, axis_key in enumerate(axis_keys)
-                            if animsep_start_keyframe
-                            <= keyframe_idx
-                            <= animsep_end_keyframe
-                        )
-                        fcurve.keyframe_points.add(len(animsep_axis_keys))
-                        # add the keyframes and set their interpolation type
-                        fcurve.keyframe_points.foreach_set(
-                            "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
-                        )
-                        # (slow way until foreach_set supports enum/str values)
-                        if interp_type == Constants.InterpolationType.NONE:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "CONSTANT"
-                        elif interp_type == Constants.InterpolationType.LINEAR:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "LINEAR"
+        :param nla_strips_by_idx: a list of Blender NLA strips, each corresponding to
+            a separate animation in animseps
+        :param bpy_data_path: Blender data path that defines where to insert keyframes
+        :param keys: list of keyframes, e.g. positions [(1,1,1), (2,2,2)]
+        :param animseps: list of XG animation separation data, one for each animation
+        :param bpy_interp_type: keyframe interpolation type
+        """
+        # We will add keyframes to a separate animation for each animsep
+        for anim_idx, animsep in enumerate(animseps):
+            animsep_keyframe_interval = int(animsep.keyframe_interval)
+            animsep_playback_length = int(animsep.playback_length)
+            animsep_start_keyframe = int(animsep.start_keyframe_idx)
+            animsep_end_keyframe = (
+                animsep_start_keyframe
+                + animsep_playback_length // animsep_keyframe_interval
+            )
+            animsep_framenums = range(
+                0, animsep_playback_length + 1, animsep_keyframe_interval
+            )
+            bpy_nla_strip = nla_strips_by_idx[anim_idx]
+            bpyaction = bpy_nla_strip.action
 
-                # TODO common function for all interpolators?
-                #  tbh not sure about vertex/texcoord/shape interps, but...
-                # import_interpolator_to_action() needs...
-                #  - interpnode,
-                #    interpnode gives .keys, .type [.times, .targets]
-                #  - bpybonename (for data_path string) that matches the matrixnode
-                #    using this interpnode
-                #  - animsep
-                #    animsep gives us start_keyframe, end_keyframe to get the keys for
-                #    this anim only
-                #  - bpyaction (to add the fcurve to)
+            # process each axis (e.g. X=0,Y=1,Z=2) separately
+            for axis_idx, axis_keys in enumerate(zip(*keys)):
+                fcurve = bpyaction.fcurves.new(data_path=bpy_data_path, index=axis_idx)
+                # only keyframes from this animsep
+                animsep_axis_keys = tuple(
+                    axis_key
+                    for keyframe_idx, axis_key in enumerate(axis_keys)
+                    if animsep_start_keyframe <= keyframe_idx <= animsep_end_keyframe
+                )
 
-                # WXYZ quaternion rotation anims
-                if rot_interpolator is not None:
-                    # print(bpybonename)
-                    # print(f"rest_rot: {rest_rot.to_euler()}")
-                    # rot_keys_quats = tuple(map(xgquat2blender, rot_interpolator.keys))
-                    # rot_keys_quats = [
-                    #     Quaternion((w, x, y, z)) for w, x, y, z in
-                    #     rot_interpolator.keys]
-                    #
-                    # # print(f"anim0:    {rot_keys_quats[0].to_euler()}")
-                    # # print(f"anim0_r90:{rot_keys_quats[0].to_euler()}")
-                    # rot_key_quats_diffs = [
-                    #     rest_rot.rotation_difference(quat) for quat in rot_keys_quats
-                    # ]
-                    #
-                    # # TODO temporary override, make all rot keys absolute
-                    # rot_key_quats_diffs = [
-                    #     Quaternion((w, x, y, z)) for w, x, y, z in
-                    #     rot_interpolator.keys]
-                    #
-                    # for i, quat in enumerate(rot_key_quats_diffs[:]):
-                    #
-                    #     # this sort of works? with imprecise result
-                    #     # axis, angle = quat.to_axis_angle()
-                    #     # x,y,z = axis
-                    #     # axis = Vector((-x,-z,y))
-                    #     # e = Quaternion(axis, angle).to_euler("XZY")
-                    #     # e.x, e.y, e.z = e.x + radians(90), e.z, -e.y
-                    #
-                    #     # okay, so this gets us to the off-by-right-angle rest pose,
-                    #     # which isn't too shabby.
-                    #     e = quat.to_euler("ZYX")
-                    #     e = Euler((e.x + radians(90), -e.y, -e.z), "ZYX")
-                    #     rot_key_quats_diffs[i] = e.to_quaternion()
-                    #
-                    #     # but how to get from that, or from wxyz, to nice anim poses?
-                    #
-                    #     pass
-
-                    # okay, so getting absolute rots is easy
-                    rotkeys_uncorrected_absolute = [
-                        Quaternion((w, x, y, z)) for x, y, z, w in rot_interpolator.keys
-                    ]
-
-                    # but, well, getting differential rots is harder
-                    # I mean, it works when all rest rots are 0...
-
-                    # no rot, for testing
-                    rotkeys_uncorrected_diff = [
-                        Quaternion() for rabs in rotkeys_uncorrected_absolute
-                    ]
-
-                    # invert matrices. wrong when rest_rot is 0
-                    for i, abs_rot in enumerate(rotkeys_uncorrected_absolute):
-
-                        rrotm = rest_rot.to_matrix()
-                        absrotm = abs_rot.to_matrix()
-
-                        diffrot = (
-                            rrotm.inverted() @ absrotm.inverted()
-                        )  # um. I think this works
-                        diffrot = (absrotm @ rrotm).inverted()  # this works too
-                        diffquat2 = rest_rot.rotation_difference(
-                            abs_rot.inverted()
-                        )  # and this
-
-                        diffquat = diffrot.to_quaternion()
-                        rotkeys_uncorrected_diff[i] = diffquat
-                        rotkeys_uncorrected_diff[i] = diffquat2
-
-                    # TODO may not need this after axis correction & differential poses?
-                    #  or maybe do this anyway for safety, idk
-                    if len(rotkeys_uncorrected_diff) > 1:
-                        for quat1, quat2 in zip(
-                            rotkeys_uncorrected_diff, rotkeys_uncorrected_diff[1:]
-                        ):
-                            quat2.make_compatible(quat1)
-
-                    interp_type = rot_interpolator.type
-                    bpy_data_path = f'pose.bones["{bpybonename}"].rotation_quaternion'
-                    # process each component W=0,X=1,Y=2,Z=3 separately
-                    for axis_idx, axis_keys in enumerate(
-                        zip(*rotkeys_uncorrected_diff)
-                    ):
-                        fcurve = bpyaction.fcurves.new(
-                            data_path=bpy_data_path, index=axis_idx
-                        )
-                        # only keyframes from this animsep
-                        animsep_axis_keys = tuple(
-                            axis_key
-                            for keyframe_idx, axis_key in enumerate(axis_keys)
-                            if animsep_start_keyframe
-                            <= keyframe_idx
-                            <= animsep_end_keyframe
-                        )
-                        fcurve.keyframe_points.add(len(animsep_axis_keys))
-                        # add the keyframes and set their interpolation type
-                        fcurve.keyframe_points.foreach_set(
-                            "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
-                        )
-                        # (slow way until foreach_set supports enum/str values)
-                        if interp_type == Constants.InterpolationType.NONE:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "CONSTANT"
-                        elif interp_type == Constants.InterpolationType.LINEAR:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "LINEAR"
-
-                # XYZ scale anims
-                if scl_interpolator is not None:
-                    scl_keys = scl_interpolator.keys
-                    # since Blender did not let us set a rest scale for this bone,
-                    # adjust the pose scale to compensate for it
-                    if rest_scl is not None:
-                        scl_keys_restadjusted = [
-                            Vector((x / rest_scl.x, y / rest_scl.y, z / rest_scl.z))
-                            for x, y, z in scl_keys
-                        ]
-                    else:
-                        scl_keys_restadjusted = [
-                            Vector((x, y, z)) for x, y, z in scl_keys
-                        ]
-
-                    interp_type = scl_interpolator.type
-                    bpy_data_path = f'pose.bones["{bpybonename}"].scale'
-                    # process each axis X=0,Y=1,Z=2 separately
-                    for axis_idx, axis_keys in enumerate(zip(*scl_keys_restadjusted)):
-                        fcurve = bpyaction.fcurves.new(
-                            data_path=bpy_data_path, index=axis_idx
-                        )
-                        # only keyframes from this animsep
-                        animsep_axis_keys = tuple(
-                            axis_key
-                            for keyframe_idx, axis_key in enumerate(axis_keys)
-                            if animsep_start_keyframe
-                            <= keyframe_idx
-                            <= animsep_end_keyframe
-                        )
-                        fcurve.keyframe_points.add(len(animsep_axis_keys))
-                        # add the keyframes and set their interpolation type
-                        fcurve.keyframe_points.foreach_set(
-                            "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
-                        )
-                        # TODO (slow way until foreach_set supports enum/str values)
-                        if interp_type == Constants.InterpolationType.NONE:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "CONSTANT"
-                        elif interp_type == Constants.InterpolationType.LINEAR:
-                            for keyframe_point in fcurve.keyframe_points:
-                                keyframe_point.interpolation = "LINEAR"
-                        # Also consider this approach:
-                        # old_interp_type =
-                        #  context.user_preferences.edit.keyframe_new_interpolation_type
-                        # context.user_preferences.edit.keyframe_new_interpolation_type
-                        #  = 'LINEAR'
-                        # # insert your keyframes
-                        # context.user_preferences.edit.keyframe_new_interpolation_type
-                        #  = old_interp_type
-                # TODO Temporarily lengthen all animations, for anim comparison
-                bpy_nla_strip.scale = 1.8
+                fcurve.keyframe_points.add(len(animsep_axis_keys))
+                # add the keyframes and set their interpolation type
+                fcurve.keyframe_points.foreach_set(
+                    "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
+                )
+                # (slow way until foreach_set supports enum/str values)
+                for keyframe_point in fcurve.keyframe_points:
+                    keyframe_point.interpolation = bpy_interp_type
 
     def _load_pose(self):
         """pose the bones
