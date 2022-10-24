@@ -165,6 +165,7 @@ class XgImporter:
                 self.xgbgmatrix_bpybonename: Dict[XgBgMatrix, str] = dict()
                 self.regmatnode_bpymat: Dict[XgMaterial, bpy.types.Material] = dict()
                 self.bpybonename_restscale: Dict[str, Vector] = dict()
+                self.bpybonename_previousquat = dict()
 
         self._mappings = Mappings()
 
@@ -904,7 +905,6 @@ class XgImporter:
             rotquat_axis, rotquat_angle = rotquat.to_axis_angle()
             # (important part is to negate the angle of the axis-angle)
             rotquat = Quaternion(rotquat_axis, -rotquat_angle)
-            # TODO make compatible with previous quaternion
             rotmtx = rotquat.to_matrix().to_4x4()
         else:
             rotmtx = Matrix.Identity(4)
@@ -1006,6 +1006,7 @@ class XgImporter:
             bone_is_animated = False
             position_is_animated = rotation_is_animated = scale_is_animated = False
 
+            # figure out whether to animate each of position, rotation, scale this frame
             if hasattr(bgmatrixnode, "inputPosition") and bgmatrixnode.inputPosition:
                 if xg_keyframe < len(bgmatrixnode.inputPosition[0].keys):
                     position = bgmatrixnode.inputPosition[0].keys[xg_keyframe]
@@ -1015,7 +1016,6 @@ class XgImporter:
                     position = None
             else:
                 position = None
-
             if hasattr(bgmatrixnode, "inputRotation") and bgmatrixnode.inputRotation:
                 if xg_keyframe < len(bgmatrixnode.inputRotation[0].keys):
                     rotation = bgmatrixnode.inputRotation[0].keys[xg_keyframe]
@@ -1025,7 +1025,6 @@ class XgImporter:
                     rotation = None
             else:
                 rotation = None
-
             if hasattr(bgmatrixnode, "inputScale") and bgmatrixnode.inputScale:
                 if xg_keyframe < len(bgmatrixnode.inputScale[0].keys):
                     scale = bgmatrixnode.inputScale[0].keys[xg_keyframe]
@@ -1039,15 +1038,26 @@ class XgImporter:
                 scale = None
                 restscale = None
 
+            # This bone may already have an initial pose already set. If this bone
+            # isn't animated, we want the initial pose to remain (e.g. Noren's feet)
             if not bone_is_animated:
-                # This bone may already have an initial pose already set. If this bone
-                # isn't animated, we want the initial pose to remain (e.g. Noren's feet)
                 continue
 
+            # position the bone, though we're not quite done yet
             pose_matrix = self._calc_pose_matrix(
                 position, rotation, scale, restscale=restscale
             )
             bpyposebone.matrix = pose_matrix
+
+            # correct bpyposebone.rotation_quaternion to work with previous frame's
+            rotquat = Quaternion(bpyposebone.rotation_quaternion)
+            prevquat = self._mappings.bpybonename_previousquat.get(bpybonename)
+            if prevquat is not None:
+                rotquat.make_compatible(prevquat)
+                bpyposebone.rotation_quaternion = rotquat
+            self._mappings.bpybonename_previousquat[bpybonename] = rotquat
+
+            # insert keyframe for this frame
             if position_is_animated:
                 bpyposebone.keyframe_insert("location")
             if rotation_is_animated:
