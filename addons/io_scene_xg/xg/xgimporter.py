@@ -1,6 +1,7 @@
 """xgimporter.py: import XgScene into Blender"""
 import os.path
 import re
+from itertools import chain
 from math import radians
 from operator import neg
 from typing import AnyStr, Collection, Dict, List, Optional, Sequence, Tuple, Union
@@ -265,12 +266,13 @@ class XgImporter:
             self._load_bones()
 
         # 6.5 load pose
-        if True:
-            self._load_pose()
+        self._load_initial_pose()
 
         # 7) Load animations
         if self.options.import_animations:
-            self._load_animations()
+            original_frame = bpy.context.scene.frame_current
+            self._load_anims()
+            bpy.context.scene.frame_set(original_frame)
 
         # back to object mode
         if bpy.context.mode != "OBJECT":
@@ -411,6 +413,19 @@ class XgImporter:
             # default bone position (required for bones that parent meshes)
             # tail of (0,1,0) required to for xgDagTransform bones
             bpyeditbone.tail = (0, 1, 0)
+
+            if self.debugoptions.correct_restpose_axes:
+                correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+                correction_rotxz = Matrix.Rotation(
+                    radians(180), 4, "Z"
+                ) @ Matrix.Rotation(radians(90), 4, "X")
+                bpyeditbone.matrix = (
+                    correction_rotxz
+                    @ correction_scalex
+                    @ bpyeditbone.matrix
+                    @ correction_scalex
+                )
+
             # TODO temporary armature view stuff for my convenience
             bpyarmobj.data.show_axes = True
             bpyarmobj.show_in_front = True
@@ -829,199 +844,7 @@ class XgImporter:
 
             bpyeditbone.length = BONE_SIZE
 
-    def _load_animations(self) -> None:
-        """create actions, load animation data from the XG scene into Blender bones"""
-        # bones need to have been positioned by now.
-        #  at the very least, any given bone about to be animated should be at its
-        #  final rest pose position. Maybe can get away with positioning its parents
-        #  later...
-
-        # we need the armature in editmode so that we can get the edit_bone matrices
-        bpyarmobj = self._get_armature(mode="EDIT")
-        bpyarmobj.animation_data_create()
-        has_animations = False
-
-        # Create blank Blender animations in advance, one for each animsep
-        animseps = self._xganimseps
-        anim_name_num_digits = len(str(len(animseps) - 1))
-        nla_strips_by_idx = []
-        have_set_solo = False  # to set only the first animation to be played by itself
-        for anim_idx, animsep in enumerate(animseps):
-            # create Blender Action
-            # include model name in the Action name. Users can manually apply an Action
-            # to any armature, so we want to make it clear which armature should have it
-            prepend_model_name = f"{self._bl_name} - " if self._bl_name else ""
-            anim_name = f"{anim_idx:0{anim_name_num_digits}}"
-            bpyaction: Action = bpy.data.actions.new(f"{prepend_model_name}{anim_name}")
-            bpyaction.use_fake_user = True
-
-            # create Blender NLA track
-            bpy_nla_track = bpyarmobj.animation_data.nla_tracks.new()
-            bpy_nla_track.name = anim_name
-            if not have_set_solo:  # set only the first animation to play by itself
-                bpy_nla_track.is_solo = True
-                have_set_solo = True
-
-            # create Blender NLA strip
-            bpy_nla_strip = bpy_nla_track.strips.new(anim_name, 0, bpyaction)
-            bpy_nla_strip.name = anim_name  # because it didn't stick the first time
-            bpy_nla_strip.action_frame_end = animsep.playback_length
-            # bpy_nla_strip.extrapolation = "NOTHING"  # nope, looks bad when anim loops
-            nla_strips_by_idx.append(bpy_nla_strip)
-
-        for matrixnode, bpybonename in self._mappings.xgbgmatrix_bpybonename.items():
-
-            # get the XG interpolators, they contain animation keyframe data
-            pos_interpolator = (
-                matrixnode.inputPosition[0]
-                if hasattr(matrixnode, "inputPosition")
-                else None
-            )
-            rot_interpolator = (
-                matrixnode.inputRotation[0]
-                if hasattr(matrixnode, "inputRotation")
-                else None
-            )
-            scl_interpolator = (
-                matrixnode.inputScale[0] if hasattr(matrixnode, "inputScale") else None
-            )
-            # if there is no animation data, skip this bone
-            if pos_interpolator is rot_interpolator is scl_interpolator is None:
-                continue
-            else:
-                has_animations = True
-
-            # get rest position, rotation, scale
-            rest_matrix = bpyarmobj.data.edit_bones[bpybonename].matrix
-            rest_pos = rest_matrix.to_translation()
-            rest_rot = rest_matrix.to_quaternion()
-            rest_scl = self._mappings.bpybonename_restscale.get(bpybonename)
-
-            # TODO need to account for times later, e.g. Flying O blinkenlights
-            if hasattr(matrixnode, "times"):
-                pass
-
-            # position keyframes
-            if pos_interpolator is not None:
-                # absolute position keyframes
-                poskeys = [
-                    Vector((x, y, z)) * self._global_import_scale
-                    for x, y, z in pos_interpolator.keys
-                ]
-                # from that, create relative position keyframes (relative to rest pose)
-                poskeydiffs = [v - rest_pos for v in poskeys]
-                rest_rot_inv = rest_rot.inverted()
-                for poskeydiff in poskeydiffs:
-                    poskeydiff.rotate(rest_rot_inv)
-                # add the relative keyframes to Blender
-                bpy_interp_type = xg_to_blender_interp_type[pos_interpolator.type]
-                bpy_data_path = f'pose.bones["{bpybonename}"].location'
-                self._add_keyframes(
-                    nla_strips_by_idx,
-                    bpy_data_path,
-                    poskeydiffs,
-                    animseps,
-                    bpy_interp_type,
-                )
-
-            # rotation keyframes
-            if rot_interpolator is not None:
-                # absolute rotation keyframes
-                rotkeys = [
-                    Quaternion((w, x, y, z)) for x, y, z, w in rot_interpolator.keys
-                ]
-                # from that, create relative rotation keyframes (relative to rest pose)
-                rotkeydiffs = [
-                    rest_rot.rotation_difference(abs_rot.inverted())
-                    for abs_rot in rotkeys
-                ]
-                if len(rotkeydiffs) > 1:
-                    for quat1, quat2 in zip(
-                            rotkeydiffs, rotkeydiffs[1:]
-                    ):
-                        quat2.make_compatible(quat1)
-                # add the relative keyframes to Blender
-                bpy_interp_type = xg_to_blender_interp_type[rot_interpolator.type]
-                bpy_data_path = f'pose.bones["{bpybonename}"].rotation_quaternion'
-                self._add_keyframes(
-                    nla_strips_by_idx,
-                    bpy_data_path,
-                    rotkeydiffs,
-                    animseps,
-                    bpy_interp_type,
-                )
-
-            # scale keyframes
-            if scl_interpolator is not None:
-                scl_keys = scl_interpolator.keys
-                # since Blender did not let us set a rest scale for this bone,
-                # we may need to adjust the pose scale accordingly
-                if rest_scl is not None:
-                    scl_keys = [
-                        (x / rest_scl.x, y / rest_scl.y, z / rest_scl.z)
-                        for x, y, z in scl_keys
-                    ]
-                # add the keyframes to Blender
-                bpy_interp_type = xg_to_blender_interp_type[scl_interpolator.type]
-                bpy_data_path = f'pose.bones["{bpybonename}"].scale'
-                self._add_keyframes(
-                    nla_strips_by_idx,
-                    bpy_data_path,
-                    scl_keys,
-                    animseps,
-                    bpy_interp_type,
-                )
-
-        if not has_animations:
-            bpyarmobj.animation_data_clear()
-
-    def _add_keyframes(
-        self, nla_strips_by_idx, bpy_data_path, keys, animseps, bpy_interp_type
-    ) -> None:
-        """add keyframes from keys into the provided nla strips
-
-        :param nla_strips_by_idx: a list of Blender NLA strips, each corresponding to
-            a separate animation in animseps
-        :param bpy_data_path: Blender data path that defines where to insert keyframes
-        :param keys: list of keyframes, e.g. positions [(1,1,1), (2,2,2)]
-        :param animseps: list of XG animation separation data, one for each animation
-        :param bpy_interp_type: keyframe interpolation type
-        """
-        # We will add keyframes to a separate animation for each animsep
-        for anim_idx, animsep in enumerate(animseps):
-            animsep_keyframe_interval = int(animsep.keyframe_interval)
-            animsep_playback_length = int(animsep.playback_length)
-            animsep_start_keyframe = int(animsep.start_keyframe_idx)
-            animsep_end_keyframe = (
-                animsep_start_keyframe
-                + animsep_playback_length // animsep_keyframe_interval
-            )
-            animsep_framenums = range(
-                0, animsep_playback_length + 1, animsep_keyframe_interval
-            )
-            bpy_nla_strip = nla_strips_by_idx[anim_idx]
-            bpyaction = bpy_nla_strip.action
-
-            # process each axis (e.g. X=0,Y=1,Z=2) separately
-            for axis_idx, axis_keys in enumerate(zip(*keys)):
-                fcurve = bpyaction.fcurves.new(data_path=bpy_data_path, index=axis_idx)
-                # only keyframes from this animsep
-                animsep_axis_keys = tuple(
-                    axis_key
-                    for keyframe_idx, axis_key in enumerate(axis_keys)
-                    if animsep_start_keyframe <= keyframe_idx <= animsep_end_keyframe
-                )
-
-                fcurve.keyframe_points.add(len(animsep_axis_keys))
-                # add the keyframes and set their interpolation type
-                fcurve.keyframe_points.foreach_set(
-                    "co", unpack_list(zip(animsep_framenums, animsep_axis_keys))
-                )
-                # (slow way until foreach_set supports enum/str values)
-                for keyframe_point in fcurve.keyframe_points:
-                    keyframe_point.interpolation = bpy_interp_type
-
-    def _load_pose(self):
+    def _load_initial_pose(self):
         """pose the bones
 
         editbones must already be in rest position.
@@ -1041,55 +864,196 @@ class XgImporter:
             bpyposebone.rotation_mode = "QUATERNION"
             bgmatrixnode = bonenode.inputMatrix[0]
 
-            # calculate pose position
-            posmtx = Matrix.Translation(
-                (c * self._global_import_scale for c in bgmatrixnode.position)
+            pose_matrix = self._calc_pose_matrix(
+                bgmatrixnode.position,
+                bgmatrixnode.rotation,
+                bgmatrixnode.scale,
+                restscale=bpybonename_restscale.get(bpybonename),
             )
+            bpyposebone.matrix = pose_matrix
 
-            # calculate pose rotation
-            rotx, roty, rotz, rotw = bgmatrixnode.rotation
+    def _calc_pose_matrix(
+        self,
+        position: Optional[Tuple[float, float, float]],
+        rotation: Optional[Tuple[float, float, float, float]],
+        scale: Optional[Tuple[float, float, float]],
+        restscale: Optional[Tuple[float, float, float]] = None,
+        bone_name_quat_compat=None,
+    ) -> Matrix:
+        """calculate and return the matrix to position a Blender pose bone
+
+        :param position: (x, y, z) or None
+        :param rotation: quaternion (x, y, z, w) or None
+        :param scale: (x, y, z) or None
+        :param restscale: (x, y, z) or None. The rest scale this bone would have if
+            Blender supported bone rest scale. Used to correct the pose scale.
+        :return:
+        """
+        # calculate pose position
+        if position is not None:
+            posmtx = Matrix.Translation(
+                (c * self._global_import_scale for c in position)
+            )
+        else:
+            posmtx = Matrix.Identity(4)
+
+        # calculate pose rotation
+        if rotation is not None:
+            rotx, roty, rotz, rotw = rotation
             rotquat = Quaternion((rotw, rotx, roty, rotz))
             rotquat_axis, rotquat_angle = rotquat.to_axis_angle()
             # (important part is to negate the angle of the axis-angle)
             rotquat = Quaternion(rotquat_axis, -rotquat_angle)
+            # TODO make compatible with previous quaternion
             rotmtx = rotquat.to_matrix().to_4x4()
+        else:
+            rotmtx = Matrix.Identity(4)
 
-            # calculate pose scale
-            sclx, scly, sclz = bgmatrixnode.scale
+        # calculate pose scale
+        if scale is not None:
+            sclx, scly, sclz = scale
             # Back when we were setting the rest pose, we couldn't set a rest scale.
             # So if this bone was supposed to have a rest scale, now we take that rest
             # scale and apply the inverse to this bone's pose scale, thereby achieving
             # the same effect.
-            if bpybonename in bpybonename_restscale:
-                restsclx, restscly, restsclz = bpybonename_restscale[bpybonename]
+            if restscale is not None:
+                restsclx, restscly, restsclz = restscale
                 sclx = sclx / restsclx
                 scly = scly / restscly
                 sclz = sclz / restsclz
             sclmtx_x = Matrix.Scale(sclx, 4, (1, 0, 0))
             sclmtx_y = Matrix.Scale(scly, 4, (0, 1, 0))
             sclmtx_z = Matrix.Scale(sclz, 4, (0, 0, 1))
+            sclmtx = sclmtx_x @ sclmtx_y @ sclmtx_z
+        else:
+            sclmtx = Matrix.Identity(4)
 
-            # combine position/rotation/scale into a Blender pose
-            pose_matrix = posmtx @ rotmtx @ sclmtx_x @ sclmtx_y @ sclmtx_z
+        # combine position/rotation/scale into a Blender pose
+        pose_matrix = posmtx @ rotmtx @ sclmtx
 
-            if self.debugoptions.correct_pose_axes:
-                # calculate and apply the axis-corrected pose
-                correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
-                # correction_scalex is used twice (applying and removing scale) to
-                # "mirror" bone rotations across the Y axis.
-                # https://math.stackexchange.com/questions/3840143
-                correction_rotxz = Matrix.Rotation(
-                    radians(180), 4, "Z"
-                ) @ Matrix.Rotation(radians(90), 4, "X")
-                bpyposebone.matrix = (
-                    correction_rotxz
-                    @ correction_scalex
-                    @ pose_matrix
-                    @ correction_scalex
-                )
+        if self.debugoptions.correct_pose_axes:
+            # calculate and apply the axis-corrected pose
+            correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+            # correction_scalex is used twice (applying and removing scale) to
+            # "mirror" bone rotations across the Y axis.
+            # https://math.stackexchange.com/questions/3840143
+            correction_rotxz = Matrix.Rotation(radians(180), 4, "Z") @ Matrix.Rotation(
+                radians(90), 4, "X"
+            )
+            pose_matrix = (
+                correction_rotxz @ correction_scalex @ pose_matrix @ correction_scalex
+            )
+
+        return pose_matrix
+
+    def _load_anims(self) -> None:
+        animseps = self._xganimseps
+        anim_name_num_digits = len(str(len(animseps) - 1))
+
+        for anim_idx, animsep in enumerate(animseps):
+            bpyarmobj = self._get_armature(mode="POSE")
+            bpyarmobj.animation_data_create()
+
+            # create a name for the new Action
+            # Include model name in the Action name. Users can manually apply an Action
+            # to any armature, so we want to make it clear which armature should have it
+            prepend_model_name = f"{self._bl_name} - " if self._bl_name else ""
+            anim_name = f"{anim_idx:0{anim_name_num_digits}}"
+            bpyarmobj.animation_data.action = bpy.data.actions.new(
+                f"{prepend_model_name}{anim_name}"
+            )
+
+            # load the animation data into the Action
+            for xgkeyframeidx, bpyframenum in zip(
+                animsep.keyframeidxs, animsep.actual_framenums
+            ):
+                self._load_anim_pose_frame(xgkeyframeidx, bpyframenum)
+
+            bpyaction: Action = bpyarmobj.animation_data.action
+            bpyaction.use_fake_user = True
+            bpyaction.frame_end = animsep.playback_length
+
+            # put this Action into a new NLA track/strip
+            bpy_nla_track = bpyarmobj.animation_data.nla_tracks.new()
+            bpy_nla_track.name = anim_name
+            bpy_nla_strip = bpy_nla_track.strips.new(anim_name, 0, bpyaction)
+            bpy_nla_strip.name = anim_name  # because it didn't stick the first time
+            bpy_nla_strip.action_frame_end = animsep.playback_length
+            # bpy_nla_strip.extrapolation = "NOTHING"  # nope, looks bad when anim loops
+
+        # make first animation play by default
+        nlatrack0 = bpyarmobj.animation_data.nla_tracks[0]
+        nlatrack0.is_solo = True
+        bpyarmobj.animation_data.action = None  # just tidier I guess
+
+    def _load_anim_pose_frame(self, xg_keyframe, blender_frame) -> None:
+        bpybonename_restscale = self._mappings.bpybonename_restscale
+        bpyarmobj = self._get_armature(mode="POSE")
+        bpy.context.scene.frame_set(blender_frame)
+
+        for bonenode, bpybonename in chain(
+            self._mappings.xgbone_bpybonename.items(),
+            self._mappings.xgdagtransform_bpybonename.items(),
+        ):
+            if not hasattr(bonenode, "inputMatrix") or not bonenode.inputMatrix:
+                continue
+
+            # get the Blender posebone to be posed + the xgBgMatrix containing the pose
+            bpyposebone = bpyarmobj.pose.bones[bpybonename]
+            bpyposebone.rotation_mode = "QUATERNION"
+            bgmatrixnode = bonenode.inputMatrix[0]
+
+            bone_is_animated = False
+            position_is_animated = rotation_is_animated = scale_is_animated = False
+
+            if hasattr(bgmatrixnode, "inputPosition") and bgmatrixnode.inputPosition:
+                if xg_keyframe < len(bgmatrixnode.inputPosition[0].keys):
+                    position = bgmatrixnode.inputPosition[0].keys[xg_keyframe]
+                    bone_is_animated = True
+                    position_is_animated = True
+                else:
+                    position = None
             else:
-                # apply the uncorrected pose
-                bpyposebone.matrix = pose_matrix
+                position = None
+
+            if hasattr(bgmatrixnode, "inputRotation") and bgmatrixnode.inputRotation:
+                if xg_keyframe < len(bgmatrixnode.inputRotation[0].keys):
+                    rotation = bgmatrixnode.inputRotation[0].keys[xg_keyframe]
+                    bone_is_animated = True
+                    rotation_is_animated = True
+                else:
+                    rotation = None
+            else:
+                rotation = None
+
+            if hasattr(bgmatrixnode, "inputScale") and bgmatrixnode.inputScale:
+                if xg_keyframe < len(bgmatrixnode.inputScale[0].keys):
+                    scale = bgmatrixnode.inputScale[0].keys[xg_keyframe]
+                    restscale = bpybonename_restscale.get(bpybonename)
+                    bone_is_animated = True
+                    scale_is_animated = True
+                else:
+                    scale = None
+                    restscale = None
+            else:
+                scale = None
+                restscale = None
+
+            if not bone_is_animated:
+                # This bone may already have an initial pose already set. If this bone
+                # isn't animated, we want the initial pose to remain (e.g. Noren's feet)
+                continue
+
+            pose_matrix = self._calc_pose_matrix(
+                position, rotation, scale, restscale=restscale
+            )
+            bpyposebone.matrix = pose_matrix
+            if position_is_animated:
+                bpyposebone.keyframe_insert("location")
+            if rotation_is_animated:
+                bpyposebone.keyframe_insert("rotation_quaternion")
+            if scale_is_animated:
+                bpyposebone.keyframe_insert("scale")
 
     def warn(self, message: str) -> None:
         """print warning message to console, store in internal list of warnings"""

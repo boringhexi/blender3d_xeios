@@ -6,7 +6,7 @@ http://gitaroopals.shoutwiki.com/wiki/.XGM
 """
 
 from struct import Struct
-from typing import AnyStr, BinaryIO, List, NamedTuple, Optional, Sequence, Union
+from typing import AnyStr, BinaryIO, List, Optional, Sequence, Union
 
 _struct_uint32 = Struct("<I")
 _struct_animsep_entry = Struct("<4f4I")
@@ -19,15 +19,47 @@ class Constants:
         REGULAR = 1
 
 
-class AnimSepEntry(NamedTuple):
-    playback_length: float = 1
-    keyframe_interval: float = 1
-    unused60: float = 60
-    start_keyframe_idx: float = 0
-    speed_mode: int = Constants.SpeedMode.TEMPO
-    unused01: int = 0
-    unused02: int = 0
-    unused03: int = 0
+class AnimSepEntry:
+    def __init__(
+        self,
+        playback_length: float = 1,
+        keyframe_interval: float = 1,
+        unused60: float = 60,
+        start_keyframe_idx: float = 0,
+        speed_mode: int = Constants.SpeedMode.TEMPO,
+        unused01: int = 0,
+        unused02: int = 0,
+        unused03: int = 0,
+    ):
+        self.playback_length = int(playback_length)
+        self.keyframe_interval = int(keyframe_interval)
+        self.start_keyframe_idx = int(start_keyframe_idx)
+        self.speed_mode = speed_mode
+
+    @property
+    def end_keyframe_idx(self):
+        return self.start_keyframe_idx + self.playback_length // self.keyframe_interval
+
+    @property
+    def actual_framenums(self):
+        return range(0, self.playback_length + 1, self.keyframe_interval)
+
+    @property
+    def keyframeidxs(self):
+        return range(self.start_keyframe_idx, self.end_keyframe_idx + 1)
+
+    @property
+    def allvalues(self):
+        return (
+            self.playback_length,
+            self.keyframe_interval,
+            60,
+            self.start_keyframe_idx,
+            self.speed_mode,
+            0,
+            0,
+            0,
+        )
 
 
 def read_animseps(
@@ -41,7 +73,7 @@ def read_animseps(
     :param num_entries: if None, will read entries until end of the file (intended
         for standalone .animsep files). If num_entries is provided, will only read that
         many entries (intended for reading from within an XGM container).
-    :return: list of AnimSepEntry namedtuples
+    :return: list of AnimSepEntry
     """
     do_close = False
     if not hasattr(file, "read"):
@@ -57,7 +89,7 @@ def read_animseps(
         ret = []
         for i in range(num_entries):
             entrydata = animsepdata[i * _entrysize : i * _entrysize + _entrysize]
-            entry = AnimSepEntry._make(_struct_animsep_entry.unpack(entrydata))
+            entry = AnimSepEntry(*_struct_animsep_entry.unpack(entrydata))
             ret.append(entry)
         return ret
     finally:
@@ -74,4 +106,4 @@ def write_animseps(file: BinaryIO, animsep: Sequence[AnimSepEntry]) -> None:
     :param animsep: sequence of AnimSepEntry namedtuples to be written to file
     """
     for entry in animsep:
-        file.write(_struct_animsep_entry.pack(*entry))
+        file.write(_struct_animsep_entry.pack(*entry.allvalues))
