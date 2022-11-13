@@ -981,10 +981,11 @@ class XgImporter:
             bpy_nla_strip.action_frame_end = animsep.playback_length
             # bpy_nla_strip.extrapolation = "NOTHING"  # nope, looks bad when anim loops
 
-        # make first animation play by default
-        nlatrack0 = bpyarmobj.animation_data.nla_tracks[0]
-        nlatrack0.is_solo = True
-        bpyarmobj.animation_data.action = None  # just tidier I guess
+        if animseps:  # prevents case where bpyarmobj hasn't been defined yet
+            # make first animation play by default
+            nlatrack0 = bpyarmobj.animation_data.nla_tracks[0]
+            nlatrack0.is_solo = True
+            bpyarmobj.animation_data.action = None  # just tidier I guess
 
     def _load_anim_pose_frame(self, xg_keyframe, blender_frame) -> None:
         bpybonename_restscale = self._mappings.bpybonename_restscale
