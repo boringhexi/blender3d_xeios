@@ -8,7 +8,7 @@ from struct import pack
 from typing import BinaryIO, Collection, Iterable, List
 
 from .xgerrors import XgWriteError
-from .xgscene import Vertices, XgScene
+from .xgscene import DagChildren, Vertices, XgScene
 
 DEBUG = False  # whether to print debug messages
 
@@ -250,15 +250,27 @@ class XgSceneWriter:
         :param xgscene: XgScene whose DAG setup to write out to the file
         :return: the number of bytes written to file
         """
+        dag = xgscene.dag
         num_bytes = self._write_pstr("dag")
         num_bytes += self._write_pstr("{")
-        for dagnode, childnodes in xgscene.dag.items():
-            num_bytes += self._write_pstr(dagnode.xgnode_name)
-            num_bytes += self._write_pstr("[")
-            for child_dagnode in childnodes:
-                num_bytes += self._write_pstr(child_dagnode.xgnode_name)
-            num_bytes += self._write_pstr("]")
+        for topdagparent, dagchildrengroup in dag.items():
+            num_bytes += self._write_pstr(topdagparent.xgnode_name)
+            self._write_dagchildrengroup(dagchildrengroup)
         num_bytes += self._write_pstr("}")
+        return num_bytes
+
+    def _write_dagchildrengroup(self, dagchildren: DagChildren) -> int:
+        """write a group of DAG children from a DAG setup to this XgSceneWriter's file
+
+        :param dagchildren: a dict containing dagchildren (potentially nested)
+        :return: the number of bytes written to file
+        """
+        num_bytes = self._write_pstr("[")
+        for dagparent, dagchildrengroup in dagchildren.items():
+            num_bytes += self._write_pstr(dagparent.xgnode_name)
+            if dagchildrengroup is not None:
+                num_bytes += self._write_dagchildrengroup(dagchildrengroup)
+        num_bytes += self._write_pstr("]")
         return num_bytes
 
     def _write_vertextargets(self, vertextargets: Iterable[Iterable[int]]) -> int:

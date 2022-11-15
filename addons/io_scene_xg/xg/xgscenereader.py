@@ -8,7 +8,7 @@ from struct import unpack
 from typing import BinaryIO, List, Optional, Tuple, Union
 
 from .xgerrors import XgInvalidFileError, XgReadError
-from .xgscene import Vertices, XgScene, new_xgnode
+from .xgscene import DagChildren, Vertices, XgScene, new_xgnode
 
 DEBUG = False  # whether to print debug messages
 
@@ -81,7 +81,7 @@ class XgSceneReader:
                     self._parse_xgnode(nodetype)
                     token = self._read_pstr()
                 else:  # token == "dag"
-                    self._parse_dag()
+                    self._parse_dagsetup()
                     break
 
             if self._autoclose:
@@ -290,45 +290,72 @@ class XgSceneReader:
                 f"(xgNode) expected ';' or '{{' but found {token!r}", self._dbg_tokenpos
             )
 
-    def _parse_dag(self) -> None:
+    def _parse_dagsetup(self):
         """parse Directed Acyclic Graph from the XG file"""
-        dbg("Adding DAG nodes to DAG:")
+        dag = self._xgscene.dag
         token = self._read_pstr()
         if token != "{":
             raise XgReadError(
                 f"(Dag) expected '{{' but found {token!r}", self._dbg_tokenpos
             )
+
+        # expecting a topmost dagparent or '}'
         token = self._read_pstr()
         while token != "}":
             try:
-                dagnode = self._xgscene.get_node(token)
+                topmost_dagparent = self._xgscene.get_node(token)
             except LookupError:
                 raise XgReadError(
-                    f"(Dag) dag node {token!r} does not exist", self._dbg_tokenpos
+                    f"(Dag) dag node {token!r} does not exist in XG file",
+                    self._dbg_tokenpos,
                 )
-            children = []
+
+            # start reading a topmost dagchildren group
             token = self._read_pstr()
-            if token != "[":
+            if token == "[":
+                dagchildren = self._parse_dagchildrengroup()
+                dag[topmost_dagparent] = dagchildren
+            else:
                 raise XgReadError(
                     f"(Dag) expected '[' but found {token!r}", self._dbg_tokenpos
                 )
+
+            # by this point, should have just read the ending ']' of this
+            # topmost dagchildren group
             token = self._read_pstr()
-            while token != "]":
-                try:
-                    child = self._xgscene.get_node(token)
-                except LookupError:
-                    raise XgReadError(
-                        f"(Dag) child node {token!r} does not exist", self._dbg_tokenpos
-                    )
-                children.append(child)
+
+    def _parse_dagchildrengroup(self) -> DagChildren:
+        """parse a group of child nodes from the Directed Acyclic Graph"""
+        # by this point, should have already read the opening '['
+
+        # expecting a dagparent or a ']'
+        token = self._read_pstr()
+        dagparents = dict()
+        while token != "]":
+
+            try:
+                current_dagparent = self._xgscene.get_node(token)
+            except LookupError:
+                raise XgReadError(
+                    f"(Dag) dag node {token!r} does not exist in XG file",
+                    self._dbg_tokenpos,
+                )
+
+            # have dagparent; now expecting another dagparent, ']',
+            # or '[' followed by dagchildren
+            token = self._read_pstr()
+
+            if token == "]":
+                dagparents[current_dagparent] = None
+                return dagparents
+            elif token == "[":
+                dagparents[current_dagparent] = self._parse_dagchildrengroup()
                 token = self._read_pstr()
-            for node in (dagnode, *children):
-                self._xgscene.preadd_node(node)
-            self._xgscene.add_dagnode(dagnode, children)
+            else:  # another dagparent
+                dagparents[current_dagparent] = None
+                continue
 
-            dbg(f"  {dagnode} {children}")
-
-            token = self._read_pstr()
+        return dagparents
 
     def _read_vertextargets(self) -> List[Tuple[int, ...]]:
         """read and return a list of vertex targets

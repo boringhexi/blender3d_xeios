@@ -408,6 +408,7 @@ _nodenames_to_nodeclasses = {
 }
 
 XgNode = Union[_nodeclasses]
+XgDagNode = Union[XgDagTransform, XgDagMesh]
 
 
 def new_xgnode(nodename, nodetype) -> Union[_nodeclasses]:
@@ -418,6 +419,11 @@ def new_xgnode(nodename, nodetype) -> Union[_nodeclasses]:
             f"Cannot create {nodetype!r} {nodename!r}, unknown node type {nodetype!r}"
         )
     return cls(nodename)
+
+
+# The DAG can be nested/recursive, however only 1 model (ST08 BAND_NOR) actually does it
+DagChildren = Optional[Dict[XgDagNode, "DagChildren"]]
+Dag = Dict[XgDagNode, DagChildren]
 
 
 class XgScene:
@@ -435,17 +441,14 @@ class XgScene:
 
     def __init__(self) -> None:
         """create an empty XgScene"""
-        # Directed Acyclic Graph {dagnode: [dagnodes]}
-        self._dag: Dict[XgNode, List[Optional[XgNode]]] = dict()
-        # pool of all pre-added nodes {XgNode name: XgNode}
+        # Directed Acyclic Graph
+        self._dag: Dag = dict()
+        # pool of all pre-added nodes
         self._preadded_nodes: Dict[str, XgNode] = dict()
 
     @property
-    def dag(self) -> Dict[XgNode, List[Optional[XgNode]]]:
-        """the scene's DAG (directed acyclic graph)
-
-        The returned dict's entries are {dag node: list of child nodes}
-        """
+    def dag(self) -> Dag:
+        """the scene's DAG (directed acyclic graph)"""
         return self._dag
 
     @property
@@ -482,8 +485,11 @@ class XgScene:
 
         Add `dagnode` and its child nodes to the scene's DAG (Directed Acyclic
         Graph), so that they will be displayed in-game or imported into Blender. If
-        `dagnode` is already in the DAG, then `children` will be added to the children
-        already in the DAG.
+        `dagnode` is already a top-level parent in the DAG, then `children` will be
+        added alongside its existing children.
+
+        Does NOT support creation of a nested DAG. (Only 1 model in GMan has a nested
+        DAG, and it doesn't need it)
 
         :param dagnode: dag node, i.e. XgNode of type "xgDagTransform" or "xgDagMesh"
         :param children: iterable of XgNodes to be parented to dagnode, can be empty.
@@ -502,10 +508,10 @@ class XgScene:
                 raise ValueError(
                     f"can't add {node!r} to DAG, it hasn't been pre-added yet"
                 )
-
         # add nodes to the DAG
-        if dagnode in self._dag:
-            new_children = (c for c in children if c not in self._dag[dagnode])
-            self._dag[dagnode].extend(new_children)
-        else:
-            self._dag[dagnode] = list(children)
+        dag = self._dag
+        if dagnode not in dag:
+            dag[dagnode] = dict()
+        dagchildrengroup = dag[dagnode]
+        for dagchildnode in children:
+            dagchildrengroup[dagchildnode] = None
