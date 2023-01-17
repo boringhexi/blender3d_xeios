@@ -229,9 +229,9 @@ class XgImporter:
 
         class ImporterDebugOptions:
             def __init__(self):
-                self.correct_mesh_axes = False
-                self.correct_restpose_axes = False
-                self.correct_pose_axes = False
+                self.correct_mesh_axes = True
+                self.correct_restpose_axes = True
+                self.correct_pose_axes = True
 
         self.options = ImporterOptions()
         self.debugoptions = ImporterDebugOptions()
