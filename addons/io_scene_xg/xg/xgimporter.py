@@ -1,10 +1,21 @@
 """xgimporter.py: import XgScene into Blender"""
 import os.path
 import re
+from collections import defaultdict
 from itertools import chain
 from math import radians
 from operator import neg
-from typing import AnyStr, Collection, Dict, List, Optional, Sequence, Tuple, Union
+from typing import (
+    AnyStr,
+    Collection,
+    DefaultDict,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import bpy
 import mathutils
@@ -16,15 +27,16 @@ from .xganimsep import AnimSepEntry, read_animseps
 from .xgerrors import XgImportError
 from .xgscene import (
     Constants,
+    DagChildren,
     XgBgMatrix,
     XgBone,
     XgDagMesh,
+    XgDagNode,
     XgDagTransform,
     XgMaterial,
     XgScene,
 )
 from .xgscenereader import XgSceneReader
-
 
 xg_to_blender_interp_type = {
     Constants.InterpolationType.NONE: "CONSTANT",
@@ -102,6 +114,86 @@ def _url_to_png(url: str, dir_: str) -> Optional[str]:
     return None
 
 
+def _make_simplified_dag(
+    dagparent: XgDagNode,
+    dagchildren: DagChildren,
+    simplified_dag: DefaultDict[XgDagNode, List[XgDagMesh]],
+) -> None:
+    """create a simplified DAG that isn't nested and contains the bare minimum
+
+    Create a simplified, non-nested version of the DAG. From the original DAG, it
+    will only contain:
+
+    - top-most xgDagMeshes
+    - only those xgDagTransforms that directly parent one or more xgDagMeshes
+    - the child xgDagMeshes of those xgDagTransforms
+
+    In addition, xgDagTransforms lacking an inputMatrix (i.e. having no pose/animation
+    data) will also be omitted.
+
+    (This is specifically meant to target Stage 8's BAND_NOR.XG model, the only one
+        in the game that has a nested DAG, and which can be faithfully represented by
+        a non-nested DAG)
+
+    :param dagparent: dag parent from a DAG
+    :param dagchildren: dag children from a DAG
+    :param simplified_dag: starts as an empty defaultdict(list), becomes populated
+        with the simplified DAG
+    :return: None, but simplified_dag will become populated
+    """
+    if dagparent.xgnode_type == "xgDagMesh":
+        # assuming an xgDagMesh parent never has children
+        simplified_dag[dagparent] = []
+        return
+    elif dagparent.xgnode_type == "xgDagTransform":
+        if not dagchildren:
+            return
+        for dagchild in dagchildren:
+            if dagchild.xgnode_type == "xgDagMesh":
+                # assuming an xgDagMesh child never has children
+                if hasattr(dagparent, "inputMatrix"):
+                    simplified_dag[dagparent].append(dagchild)
+                else:
+                    # omit the un-animated xgDagTransform parent, as it has no effect
+                    simplified_dag[dagchild] = []
+            else:  # dagchild.xgnode_type == "xgDagTransform"
+                _make_simplified_dag(dagchild, dagchildren[dagchild], simplified_dag)
+
+
+def _correct_pose_matrix_axes(pose_matrix: Matrix) -> Matrix:
+    """calculate and return the axis-corrected pose matrix
+
+    Take a Blender posebone matrix originating from an XG model and using the XG axis
+        system, return the equivalent matrix in Blender's axis system
+
+    :param pose_matrix: Matrix intended for a Blender posebone
+    :return: equivalent Matrix with axes corrected to Blender's axis system
+    """
+    correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+    # correction_scalex is used twice (applying and removing scale) to
+    # "mirror" bone rotations across the Y axis.
+    # https://math.stackexchange.com/questions/3840143
+
+    correction_rotxz = Matrix.Rotation(radians(180), 4, "Z") @ Matrix.Rotation(
+        radians(90), 4, "X"
+    )
+
+    pose_matrix = correction_rotxz @ correction_scalex @ pose_matrix @ correction_scalex
+    return pose_matrix
+
+
+def _flatten_prs_is_animated(
+    prs_is_animated1: Tuple[bool, bool, bool], prs_is_animated2: Tuple[bool, bool, bool]
+) -> Tuple[bool, bool, bool]:
+    """ORs the respective bools from each tuple
+
+    :param prs_is_animated1: 1 bool each for position,rotation,scale being animated
+    :param prs_is_animated2: same
+    :return:
+    """
+    return tuple(a or b for a, b in zip(prs_is_animated1, prs_is_animated2))
+
+
 class XgImporter:
     """imports an XgScene into Blender"""
 
@@ -162,7 +254,6 @@ class XgImporter:
                 self.xgdagmesh_bpymeshobj: Dict[XgDagMesh, bpy.types.Object] = dict()
                 self.xgdagtransform_bpybonename: Dict[XgDagTransform, str] = dict()
                 self.xgbone_bpybonename: Dict[XgBone, str] = dict()
-                self.xgbgmatrix_bpybonename: Dict[XgBgMatrix, str] = dict()
                 self.regmatnode_bpymat: Dict[XgMaterial, bpy.types.Material] = dict()
                 self.bpybonename_restscale: Dict[str, Vector] = dict()
                 self.bpybonename_previousquat = dict()
@@ -251,7 +342,7 @@ class XgImporter:
             bpy.ops.object.mode_set(mode="OBJECT")
 
         # 1) Initialize objects & set up hierarchy
-        self._init_objs_hierarchy_from_dagnodes()
+        self._init_objs_hierarchy_from_dag()
 
         # 3) Load regular materials
         # TODO this is currently done within _load_meshes()
@@ -266,7 +357,7 @@ class XgImporter:
         if self._mappings.xgbone_bpybonename:
             self._load_bones()
 
-        # 6.5 load pose
+        # 6.5 load initial pose
         self._load_initial_pose()
 
         # 7) Load animations
@@ -280,33 +371,34 @@ class XgImporter:
             bpy.ops.object.mode_set(mode="OBJECT")
         # bpy.context.view_layer.objects.active = None #TODO nah, make the empty active
 
-    def _init_objs_hierarchy_from_dagnodes(self):
+    def _init_objs_hierarchy_from_dag(self):
         """create empty Blender objects and link them in the right hierarchy
 
-        Create empty Blender objects and link them (e.g. assign textures to materials,
-        parent bones to other bones). XgScene data will not be loaded into the Blender
-        objects yet.
+        Create empty Blender objects and link them (e.g. assign textures to materials).
+        XgScene data will not be loaded into the Blender objects yet.
         """
-
         self._get_empty()  # create the Empty that will contain everything
 
-        for dagnode, dagchildren in self._xgscene.dag.items():
+        dag = self._xgscene.dag
+        simplified_dag = defaultdict(list)
+        for dagparent, dagchildren in dag.items():
+            _make_simplified_dag(dagparent, dagchildren, simplified_dag)
+
+        for dagnode, dagchildren in simplified_dag.items():
 
             # For xgDagTransforms, create a bone to act as the transform, then
             # create child meshes and parent them to the bone.
             if dagnode.xgnode_type == "xgDagTransform":
 
                 # init bone to use for the xgDagTransform
-                bpybone_name = self._init_bone_hierarchy_from_bonenode(dagnode)
+                bpybone_name = self._init_bone_from_bonenode(dagnode)
+                # init meshes to be parented to the xgDagTransform's bone
+                bpymeshobjs = [
+                    self._init_mesh_from_dagmeshnode(xgdagmesh, True)
+                    for xgdagmesh in dagchildren
+                ]
 
-                # if bone was successfully created:
-                if bpybone_name is not None:
-                    # init meshes to be parented to the xgDagTransform's bone
-                    bpymeshobjs = [
-                        self._init_mesh_from_dagmeshnode(xgdagmesh, True)
-                        for xgdagmesh in dagchildren
-                    ]
-
+                if bpybone_name is not None:  # if a bone was made,
                     # then parent meshes to the xgDagTransform
                     for bpymeshobj in bpymeshobjs:
                         # skip meshes that were not created
@@ -316,74 +408,60 @@ class XgImporter:
                             bpymeshobj.parent_bone = bpybone_name
                             bpymeshobj.matrix_world = Matrix()
 
-                # if bone was not created:
-                else:
-                    # Skip the xgDagTransform since it will have no effect anyway.
-                    # Just init the child xgDagMeshes.
-                    for dagchild in dagchildren:
-                        self._init_mesh_from_dagmeshnode(dagchild)
-
             # For xgDagMeshes, just create the mesh
             elif dagnode.xgnode_type == "xgDagMesh":
                 self._init_mesh_from_dagmeshnode(dagnode)
-                if dagchildren:
-                    self.warn(
-                        f"{dagnode} has dag children, this probably shouldn't happen? "
-                        f"dag children {dagchildren} will not be loaded"
-                    )
 
             # For other non-DAG node types, warn and skip
             else:
                 self.warn(f"Unexpected node type {dagnode} in dag, skipping")
 
-    def _init_bone_hierarchy_from_bonenode(
+    def _init_bone_from_bonenode(
         self, bonenode: Union[XgDagTransform, XgBone]
     ) -> Optional[str]:
         """init a new Blender bone from bonenode, return Blender bone name
 
-        Additional effects: also creates the parent bones, and their parents, all the
-        way up the hierarchy, and parents them properly in Blender.
-
         :param bonenode: XgDagTransform or XgBone
         :return: Blender bone's name, or None if the bone was not created
-            (either because bonenode is the wrong type, or because it has no inputMatrix
-            which means it would have no effect)
+            (because it has no inputMatrix which means it would have no effect)
         """
         if bonenode.xgnode_type == "xgDagTransform":
             bonename_mapping = self._mappings.xgdagtransform_bpybonename
         elif bonenode.xgnode_type == "xgBone":
             bonename_mapping = self._mappings.xgbone_bpybonename
         else:
-            self.warn(
-                f"tried to init {bonenode} as a bone, but it is not an XgDagTransform "
-                "or XgBone, skipping"
-            )
-            return None
+            raise ValueError(f"{bonenode} isn't an XgDagTransform or XgBone")
+
+        bpyarmobj = self._get_armature(mode="EDIT")
+        # TODO temporary armature view stuff for my convenience
+        bpyarmobj.data.show_axes = True
+        bpyarmobj.show_in_front = True
 
         if bonenode not in bonename_mapping:
             # initialize new Blender bone
             if hasattr(bonenode, "inputMatrix"):
-                bpyarmobj = self._get_armature(mode="EDIT")
-                bpybone_name = self._init_bone_from_bgmatrixnode(
-                    bonenode.inputMatrix[0]
-                )
-                bpyeditbone = bpyarmobj.data.edit_bones[bpybone_name]
-                cur_mtxnode, cur_bpybone = bonenode.inputMatrix[0], bpyeditbone
-                # initialize new Blender bones all the way up the hierarchy
-                while hasattr(cur_mtxnode, "inputParentMatrix"):
-                    par_mtxnode = cur_mtxnode.inputParentMatrix[0]
-                    par_bpybone_name = self._init_bone_from_bgmatrixnode(par_mtxnode)
-                    par_bpyeditbone = bpyarmobj.data.edit_bones[par_bpybone_name]
-                    cur_bpybone.parent = par_bpyeditbone
-                    cur_mtxnode, cur_bpybone = par_mtxnode, par_bpyeditbone
 
-            # bone has no inputMatrix, so don't bother
-            else:
-                if bonenode.xgnode_type == "xgBone":
-                    self.warn(
-                        f"{bonenode} has no inputMatrix, i.e. is a bone with a rest"
-                        "pose but no animation or posing."
+                # create new Blender bone in armature
+                bpyeditbone = bpyarmobj.data.edit_bones.new(name=bonenode.xgnode_name)
+                bpybone_name = bpyeditbone.name
+                bonename_mapping[bonenode] = bpybone_name
+
+                # tail of (0,1,0) required to for xgDagTransform bones
+                bpyeditbone.tail = (0, 1, 0)
+
+                if self.debugoptions.correct_restpose_axes:
+                    correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
+                    correction_rotxz = Matrix.Rotation(
+                        radians(180), 4, "Z"
+                    ) @ Matrix.Rotation(radians(90), 4, "X")
+                    bpyeditbone.matrix = (
+                        correction_rotxz
+                        @ correction_scalex
+                        @ bpyeditbone.matrix
+                        @ correction_scalex
                     )
+            else:
+                # bone has no inputMatrix, so don't bother
                 return None
 
             bonename_mapping[bonenode] = bpybone_name
@@ -391,55 +469,6 @@ class XgImporter:
             # retrieve existing bone
             bpybone_name = bonename_mapping[bonenode]
         return bpybone_name
-
-    def _init_bone_from_bgmatrixnode(self, bgmatrixnode: XgBgMatrix):
-        """init a new Blender bone from bgmatrixnode, return Blender bone name
-
-        Creates a new Blender bone from matrixnode if it hasn't been already, otherwise
-        retrieves the existing Blender bone. Either way, returns the bone's name.
-
-        :param bgmatrixnode: XgBgMatrix
-        :return: name of Blender bone
-        """
-        bgmatrix_mapping = self._mappings.xgbgmatrix_bpybonename
-        if bgmatrixnode not in bgmatrix_mapping:
-            # create new Blender bone in armature
-
-            bpyarmobj = self._get_armature(mode="EDIT")
-            bpyeditbone = bpyarmobj.data.edit_bones
-            bpyeditbone = bpyarmobj.data.edit_bones.new(name=bgmatrixnode.xgnode_name)
-            bpyeditbone_name = bpyeditbone.name
-            bgmatrix_mapping[bgmatrixnode] = bpyeditbone_name
-
-            # default bone position (required for bones that parent meshes)
-            # tail of (0,1,0) required to for xgDagTransform bones
-            bpyeditbone.tail = (0, 1, 0)
-
-            if self.debugoptions.correct_restpose_axes:
-                correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
-                correction_rotxz = Matrix.Rotation(
-                    radians(180), 4, "Z"
-                ) @ Matrix.Rotation(radians(90), 4, "X")
-                bpyeditbone.matrix = (
-                    correction_rotxz
-                    @ correction_scalex
-                    @ bpyeditbone.matrix
-                    @ correction_scalex
-                )
-
-            # TODO temporary armature view stuff for my convenience
-            bpyarmobj.data.show_axes = True
-            bpyarmobj.show_in_front = True
-
-            if bpyeditbone_name != bgmatrixnode.xgnode_name:
-                self.warn(
-                    f"xgbgmatrix {bgmatrixnode.xgnode_name!r} was given different name "
-                    f"{bpyeditbone_name!r}"
-                )
-        else:
-            # retrieve existing bone's name
-            bpyeditbone_name = bgmatrix_mapping[bgmatrixnode]
-        return bpyeditbone_name
 
     def _init_mesh_from_dagmeshnode(
         self, dagmeshnode: XgDagMesh, dagtransform: bool = False
@@ -578,7 +607,7 @@ class XgImporter:
                     )
                 for envnode in envelopenodes:
                     # inputMatrix1[0] is xgBone
-                    self._init_bone_hierarchy_from_bonenode(envnode.inputMatrix1[0])
+                    self._init_bone_from_bonenode(envnode.inputMatrix1[0])
 
                 # make armature the parent of this mesh
                 bpyarmobj = self._get_armature(mode="EDIT")
@@ -855,8 +884,12 @@ class XgImporter:
         """
         bpybonename_restscale = self._mappings.bpybonename_restscale
         bpyarmobj = self._get_armature(mode="POSE")
+        both_bone_types = chain(
+            self._mappings.xgdagtransform_bpybonename.items(),
+            self._mappings.xgbone_bpybonename.items(),
+        )
 
-        for bonenode, bpybonename in self._mappings.xgbone_bpybonename.items():
+        for bonenode, bpybonename in both_bone_types:
             if not hasattr(bonenode, "inputMatrix") or not bonenode.inputMatrix:
                 continue
 
@@ -865,13 +898,41 @@ class XgImporter:
             bpyposebone.rotation_mode = "QUATERNION"
             bgmatrixnode = bonenode.inputMatrix[0]
 
-            pose_matrix = self._calc_pose_matrix(
-                bgmatrixnode.position,
-                bgmatrixnode.rotation,
-                bgmatrixnode.scale,
-                restscale=bpybonename_restscale.get(bpybonename),
+            pose_matrix = self._calc_flattened_initialpose_matrix(
+                bgmatrixnode, restscale=bpybonename_restscale.get(bpybonename)
             )
+            if self.debugoptions.correct_pose_axes:
+                pose_matrix = _correct_pose_matrix_axes(pose_matrix)
             bpyposebone.matrix = pose_matrix
+
+    def _calc_flattened_initialpose_matrix(
+        self,
+        bgmatrixnode: XgBgMatrix,
+        restscale: Optional[Tuple[float, float, float]] = None,
+    ) -> Matrix:
+        """return the matrix of this bgmatrixnode multiplied by all its parents
+
+        :param bgmatrixnode: XgBgMatrix node
+        :param restscale: (x, y, z) or None. The rest scale this bone would have if
+            Blender supported bone rest scale. Used to correct the pose scale.
+        :return: Blender Matrix
+        """
+        this_pose_matrix = self._calc_pose_matrix(
+            bgmatrixnode.position,
+            bgmatrixnode.rotation,
+            bgmatrixnode.scale,
+            restscale=restscale,
+        )
+        if (
+            hasattr(bgmatrixnode, "inputParentMatrix")
+            and bgmatrixnode.inputParentMatrix
+        ):
+            parent_pose_matrix = self._calc_flattened_initialpose_matrix(
+                bgmatrixnode.inputParentMatrix[0]
+            )
+            return parent_pose_matrix @ this_pose_matrix
+        else:
+            return this_pose_matrix
 
     def _calc_pose_matrix(
         self,
@@ -930,19 +991,6 @@ class XgImporter:
 
         # combine position/rotation/scale into a Blender pose
         pose_matrix = posmtx @ rotmtx @ sclmtx
-
-        if self.debugoptions.correct_pose_axes:
-            # calculate and apply the axis-corrected pose
-            correction_scalex = Matrix.Scale(-1, 4, Vector((1, 0, 0)))
-            # correction_scalex is used twice (applying and removing scale) to
-            # "mirror" bone rotations across the Y axis.
-            # https://math.stackexchange.com/questions/3840143
-            correction_rotxz = Matrix.Rotation(radians(180), 4, "Z") @ Matrix.Rotation(
-                radians(90), 4, "X"
-            )
-            pose_matrix = (
-                correction_rotxz @ correction_scalex @ pose_matrix @ correction_scalex
-            )
 
         return pose_matrix
 
@@ -1004,50 +1052,17 @@ class XgImporter:
             bpyposebone.rotation_mode = "QUATERNION"
             bgmatrixnode = bonenode.inputMatrix[0]
 
-            bone_is_animated = False
-            position_is_animated = rotation_is_animated = scale_is_animated = False
-
-            # figure out whether to animate each of position, rotation, scale this frame
-            if hasattr(bgmatrixnode, "inputPosition") and bgmatrixnode.inputPosition:
-                if xg_keyframe < len(bgmatrixnode.inputPosition[0].keys):
-                    position = bgmatrixnode.inputPosition[0].keys[xg_keyframe]
-                    bone_is_animated = True
-                    position_is_animated = True
-                else:
-                    position = None
-            else:
-                position = None
-            if hasattr(bgmatrixnode, "inputRotation") and bgmatrixnode.inputRotation:
-                if xg_keyframe < len(bgmatrixnode.inputRotation[0].keys):
-                    rotation = bgmatrixnode.inputRotation[0].keys[xg_keyframe]
-                    bone_is_animated = True
-                    rotation_is_animated = True
-                else:
-                    rotation = None
-            else:
-                rotation = None
-            if hasattr(bgmatrixnode, "inputScale") and bgmatrixnode.inputScale:
-                if xg_keyframe < len(bgmatrixnode.inputScale[0].keys):
-                    scale = bgmatrixnode.inputScale[0].keys[xg_keyframe]
-                    restscale = bpybonename_restscale.get(bpybonename)
-                    bone_is_animated = True
-                    scale_is_animated = True
-                else:
-                    scale = None
-                    restscale = None
-            else:
-                scale = None
-                restscale = None
-
-            # This bone may already have an initial pose already set. If this bone
-            # isn't animated, we want the initial pose to remain (e.g. Noren's feet)
-            if not bone_is_animated:
-                continue
-
-            # position the bone, though we're not quite done yet
-            pose_matrix = self._calc_pose_matrix(
-                position, rotation, scale, restscale=restscale
+            # position the bone
+            (
+                pose_matrix,
+                prs_is_animated,
+            ) = self._calc_flattened_animpose_matrix_and_prs_is_animated(
+                bgmatrixnode,
+                xg_keyframe,
+                restscale=bpybonename_restscale.get(bpybonename),
             )
+            if self.debugoptions.correct_pose_axes:
+                pose_matrix = _correct_pose_matrix_axes(pose_matrix)
             bpyposebone.matrix = pose_matrix
 
             # correct bpyposebone.rotation_quaternion to work with previous frame's
@@ -1058,13 +1073,98 @@ class XgImporter:
                 bpyposebone.rotation_quaternion = rotquat
             self._mappings.bpybonename_previousquat[bpybonename] = rotquat
 
-            # insert keyframe for this frame
-            if position_is_animated:
+            # insert keyframes for this frame
+            pos_is_animated, rot_is_animated, scl_is_animated = prs_is_animated
+            if pos_is_animated:
                 bpyposebone.keyframe_insert("location")
-            if rotation_is_animated:
+            if rot_is_animated:
                 bpyposebone.keyframe_insert("rotation_quaternion")
-            if scale_is_animated:
+            if scl_is_animated:
                 bpyposebone.keyframe_insert("scale")
+
+    def _calc_flattened_animpose_matrix_and_prs_is_animated(
+        self,
+        bgmatrixnode: XgBgMatrix,
+        xg_keyframe: int,
+        restscale: Optional[Tuple[float, float, float]] = None,
+    ) -> Tuple[Matrix, Tuple[bool, bool, bool]]:
+        """return the matrix of this bgmatrixnode multiplied by all its parents
+
+        :param bgmatrixnode: XgBgMatrix node
+        :param xg_keyframe: which XG keyframe's animation pose to calculate
+        :param restscale: (x, y, z) or None. The rest scale this bone would have if
+            Blender supported bone rest scale. Used to correct the pose scale.
+        :return: Tuple of (flattened_pose_matrix, prs_is_animated) where prs_is_animated
+            is a tuple of 3 bools, one each for pos/rot/scale being animated or not.
+            The calling function can use these to decide which types of keyframes to
+            insert this frame.
+        """
+        # initial pose PRS will be used where animation pose PRS does not exist
+        (initial_pose_position, initial_pose_rotation, initial_pose_scale) = (
+            bgmatrixnode.position,
+            bgmatrixnode.rotation,
+            bgmatrixnode.scale,
+        )
+
+        # figure out whether to animate each of position, rotation, scale this frame
+        # as well as choosing the right position, rotation, and scale
+        position_is_animated = rotation_is_animated = scale_is_animated = False
+        if hasattr(bgmatrixnode, "inputPosition") and bgmatrixnode.inputPosition:
+            if xg_keyframe < len(bgmatrixnode.inputPosition[0].keys):
+                anim_pose_position = bgmatrixnode.inputPosition[0].keys[xg_keyframe]
+                position_is_animated = True
+            else:
+                anim_pose_position = initial_pose_position
+        else:
+            anim_pose_position = initial_pose_position
+        if hasattr(bgmatrixnode, "inputRotation") and bgmatrixnode.inputRotation:
+            if xg_keyframe < len(bgmatrixnode.inputRotation[0].keys):
+                anim_pose_rotation = bgmatrixnode.inputRotation[0].keys[xg_keyframe]
+                rotation_is_animated = True
+            else:
+                anim_pose_rotation = initial_pose_rotation
+        else:
+            anim_pose_rotation = initial_pose_rotation
+        if hasattr(bgmatrixnode, "inputScale") and bgmatrixnode.inputScale:
+            if xg_keyframe < len(bgmatrixnode.inputScale[0].keys):
+                anim_pose_scale = bgmatrixnode.inputScale[0].keys[xg_keyframe]
+                scale_is_animated = True
+            else:
+                anim_pose_scale = initial_pose_scale
+        else:
+            anim_pose_scale = initial_pose_scale
+
+        this_prs_is_animated = (
+            position_is_animated,
+            rotation_is_animated,
+            scale_is_animated,
+        )
+        this_pose_matrix = self._calc_pose_matrix(
+            anim_pose_position,
+            anim_pose_rotation,
+            anim_pose_scale,
+            restscale=restscale,
+        )
+        if (
+            hasattr(bgmatrixnode, "inputParentMatrix")
+            and bgmatrixnode.inputParentMatrix
+        ):
+            (
+                parent_pose_matrix,
+                par_prs_is_animated,
+            ) = self._calc_flattened_animpose_matrix_and_prs_is_animated(
+                bgmatrixnode.inputParentMatrix[0], xg_keyframe
+            )
+            flat_prs_is_animated = _flatten_prs_is_animated(
+                par_prs_is_animated, this_prs_is_animated
+            )
+            return parent_pose_matrix @ this_pose_matrix, flat_prs_is_animated
+        else:
+            return this_pose_matrix, (
+                position_is_animated,
+                rotation_is_animated,
+                scale_is_animated,
+            )
 
     def warn(self, message: str) -> None:
         """print warning message to console, store in internal list of warnings"""
