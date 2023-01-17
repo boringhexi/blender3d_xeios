@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Xeios XG format",
     "author": "boringhexi",
-    "version": (0, 1, 4),
+    "version": (0, 1, 5),
     "blender": (3, 4, 0),
     "location": "File > Import-Export",
     "description": "For Xeios engine games like Gitaroo Man and まげる つける はしーる",
