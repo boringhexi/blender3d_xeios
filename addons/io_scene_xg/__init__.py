@@ -44,6 +44,7 @@ if "_this_file_was_already_loaded" in locals():
         ".xg.xgexporter",
         ".xg",
         ".import_xg",
+        ".export_xg",
     )
     reload_modules(*modules_to_reload, pkg=__package__)
 _this_file_was_already_loaded = True  # to detect the reload next time
