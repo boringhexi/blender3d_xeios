@@ -99,7 +99,6 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
         self.node_tree.nodes.new("NodeGroupOutput")
         self._create_node_tree()
         self._reconnect_node_tree()
-        self.vertexcolor_default = 1
 
     def draw_buttons(self, context, layout):
         row = layout.row()
