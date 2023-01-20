@@ -9,9 +9,9 @@ from bpy.props import (
 from bpy.types import Image, ShaderNodeCustomGroup
 
 
-class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
-    bl_name = "XeiosMaterialShaderNode"
-    bl_label = "Xeios Material"
+class XeiosShaderNode(ShaderNodeCustomGroup):
+    bl_name = "XeiosShaderNode"
+    bl_label = "Xeios Shader"
 
     shadingtypes = [
         ("SHADED", "Shaded", "Regular shading"),
@@ -25,11 +25,11 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
         ("SUBTRACT", "Subtract", "Subtractive blend"),
     ]
 
-    matcolormodes = [
+    colormodes = [
         (
             "DIFFUSESPECULAR",
             "Diffuse + Specular",
-            "Use material's diffuse and specular colors",
+            "Use diffuse and specular colors",
         ),
         (
             "VERTEXCOLORS",
@@ -48,9 +48,9 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
 
     select_shadingtype: EnumProperty(description="Shading type", items=shadingtypes)
     select_blendtype: EnumProperty(description="Blend type", items=blendtypes)
-    select_matcolormode: EnumProperty(
-        description="Material color mode",
-        items=matcolormodes,
+    select_colormode: EnumProperty(
+        description="Color mode",
+        items=colormodes,
     )
     select_diffusecolor: FloatVectorProperty(
         name="",
@@ -110,14 +110,14 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
         row.prop(self, "select_blendtype", text="")
 
         row = layout.row()
-        row.alert = self.select_matcolormode == "None"
-        row.prop(self, "select_matcolormode", text="")
+        row.alert = self.select_colormode == "None"
+        row.prop(self, "select_colormode", text="")
 
-        # Based on select_matcolormode, the next section will either be
+        # Based on select_colormode, the next section will either be
         # diffuse + specular or vertex colors
         row = layout.row()
         row.column()  # indent the next section with an empty column
-        if self.select_matcolormode == "DIFFUSESPECULAR":
+        if self.select_colormode == "DIFFUSESPECULAR":
             box = row.box()
 
             row = box.row()
@@ -130,7 +130,7 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
             column.prop(self, "select_specularexp", text="")
             column.scale_x = 1.5  # a little wider to show the number more clearly
 
-        elif self.select_matcolormode == "VERTEXCOLORS":
+        elif self.select_colormode == "VERTEXCOLORS":
             column = row.column()
             ob = context.active_object
             if ob.type == "MESH" and ob.data.color_attributes:
@@ -147,7 +147,7 @@ class XeiosMaterialShaderNode(ShaderNodeCustomGroup):
         col = row.column()
         col.prop(self, "select_texreflect", text="Reflective")
 
-    def copy(self, node: "XeiosMaterialShaderNode"):
+    def copy(self, node: "XeiosShaderNode"):
         self.node_tree = node.node_tree.copy()
 
     def free(self):

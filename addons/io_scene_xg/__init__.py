@@ -20,7 +20,7 @@ from nodeitems_utils import (
     unregister_node_categories,
 )
 
-from .shadernodes.xeiosmaterial import XeiosMaterialShaderNode
+from .shadernodes.xeiosshader import XeiosShaderNode
 
 
 # Make the entire addon reloadable by Blender:
@@ -33,7 +33,7 @@ if "_this_file_was_already_loaded" in locals():
 
     # Order matters. Reload module B before reloading module A that imports module B
     modules_to_reload = (
-        ".shadernodes.xeiosmaterial",
+        ".shadernodes.xeiosshader",
         ".shadernodes",
         ".xg.xgerrors",
         ".xg.xganimsep",
@@ -139,7 +139,7 @@ def menu_func_export(self, context):
     self.layout.operator(ExportXG.bl_idname, text="Xeios (.XG)")
 
 
-classes = (ImportXG, ExportXG, XG_PT_export_include, XeiosMaterialShaderNode)
+classes = (ImportXG, ExportXG, XG_PT_export_include, XeiosShaderNode)
 
 
 def register():
@@ -152,9 +152,9 @@ def register():
     xeios_shader_menu = [
         ShaderNodeCategory(
             "SH_NEW_XEIOS",
-            "Xeios Shader",
+            "Xeios",
             items=[
-                NodeItem("XeiosMaterialShaderNode"),
+                NodeItem("XeiosShaderNode"),
             ],
         ),
     ]
