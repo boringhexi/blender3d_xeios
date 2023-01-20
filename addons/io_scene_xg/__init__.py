@@ -13,6 +13,15 @@ bl_info = {
 import bpy
 from bpy.props import BoolProperty, CollectionProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper, ImportHelper
+from nodeitems_builtins import ShaderNodeCategory
+from nodeitems_utils import (
+    NodeItem,
+    register_node_categories,
+    unregister_node_categories,
+)
+
+from .shadernodes.xeiosmaterial import XeiosMaterialShaderNode
+
 
 # Make the entire addon reloadable by Blender:
 # The "Reload Scripts" command reloads only this file (the top-level __init__.py).
@@ -24,6 +33,8 @@ if "_this_file_was_already_loaded" in locals():
 
     # Order matters. Reload module B before reloading module A that imports module B
     modules_to_reload = (
+        ".shadernodes.xeiosmaterial",
+        ".shadernodes",
         ".xg.xgerrors",
         ".xg.xganimsep",
         ".xg.xgscene",
@@ -127,7 +138,7 @@ def menu_func_export(self, context):
     self.layout.operator(ExportXG.bl_idname, text="Xeios (.XG)")
 
 
-classes = (ImportXG, ExportXG, XG_PT_export_include)
+classes = (ImportXG, ExportXG, XG_PT_export_include, XeiosMaterialShaderNode)
 
 
 def register():
@@ -137,6 +148,17 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
+    xeios_shader_menu = [
+        ShaderNodeCategory(
+            "SH_NEW_XEIOS",
+            "Xeios Shader",
+            items=[
+                NodeItem("XeiosMaterialShaderNode"),
+            ],
+        ),
+    ]
+    register_node_categories("XEIOS_SHADER", xeios_shader_menu)
+
 
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
@@ -144,6 +166,8 @@ def unregister():
 
     for cls in classes:
         bpy.utils.unregister_class(cls)
+
+    unregister_node_categories("XEIOS_SHADER")
 
 
 if __name__ == "__main__":
