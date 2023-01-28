@@ -20,8 +20,9 @@ class MakeImageChannelPackedOperator(bpy.types.Operator):
     image_name: StringProperty()
 
     def execute(self, context):
-        print("Make channel packed (button pressed)")
-        print(self.image_name)
+        if self.image_name in bpy.data.images.keys():
+            image = bpy.data.images[self.image_name]
+            image.alpha_mode = "CHANNEL_PACKED"
         return {"FINISHED"}
 
 
@@ -33,8 +34,11 @@ class FixMaterialAlphaModeOperator(bpy.types.Operator):
     needs_opaque: BoolProperty()
 
     def execute(self, context):
-        print("Needs Opaque?")
-        print(self.needs_opaque)
+        material = context.active_object.active_material
+        if self.needs_opaque:
+            material.blend_method = "OPAQUE"
+        else:  # Otherwise, needs Alpha Blend
+            material.blend_method = "BLEND"
         return {"FINISHED"}
 
 
