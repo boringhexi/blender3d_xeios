@@ -20,7 +20,11 @@ from nodeitems_utils import (
     unregister_node_categories,
 )
 
-from .shadernodes.xeiosshader import XeiosShaderNode
+from .shadernodes.xeiosshader import (
+    MakeImageChannelPackedOperator,
+    FixMaterialAlphaModeOperator,
+    XeiosShaderNode,
+)
 
 
 # Make the entire addon reloadable by Blender:
@@ -139,7 +143,14 @@ def menu_func_export(self, context):
     self.layout.operator(ExportXG.bl_idname, text="Xeios (.XG)")
 
 
-classes = (ImportXG, ExportXG, XG_PT_export_include, XeiosShaderNode)
+classes = (
+    ImportXG,
+    ExportXG,
+    XG_PT_export_include,
+    MakeImageChannelPackedOperator,
+    FixMaterialAlphaModeOperator,
+    XeiosShaderNode,
+)
 
 
 def register():
