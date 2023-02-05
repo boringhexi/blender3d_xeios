@@ -21,11 +21,11 @@ from nodeitems_utils import (
 )
 
 from .shadernodes.xeiosshader import (
-    MakeImageChannelPackedOperator,
+    EnableShowBackfaceOperator,
     FixMaterialAlphaModeOperator,
+    MakeImageChannelPackedOperator,
     XeiosShaderNode,
 )
-
 
 # Make the entire addon reloadable by Blender:
 # The "Reload Scripts" command reloads only this file (the top-level __init__.py).
@@ -149,6 +149,7 @@ classes = (
     XG_PT_export_include,
     MakeImageChannelPackedOperator,
     FixMaterialAlphaModeOperator,
+    EnableShowBackfaceOperator,
     XeiosShaderNode,
 )
 

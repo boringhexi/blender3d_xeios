@@ -13,9 +13,7 @@ from bpy.types import Image, ShaderNodeCustomGroup
 class MakeImageChannelPackedOperator(bpy.types.Operator):
     bl_idname = "xeiosshader.make_image_channel_packed"
     bl_label = "Make Image channel packed"
-    bl_description = (
-        "Make the Image use Channel Packed alpha mode (for accurate rendering)"
-    )
+    bl_description = "Make the Image use Channel Packed alpha mode (for accurate display in Eevee/Cycles)"
 
     image_name: StringProperty()
 
@@ -29,7 +27,9 @@ class MakeImageChannelPackedOperator(bpy.types.Operator):
 class FixMaterialAlphaModeOperator(bpy.types.Operator):
     bl_idname = "xeiosshader.fix_material_alpha_mode"
     bl_label = "Fix Material alpha mode"
-    bl_description = "Change the Material to right alpha mode (for accurate rendering)"
+    bl_description = (
+        "Change the Material to correct alpha mode (for accurate display in Eevee)"
+    )
 
     needs_opaque: BoolProperty()
 
@@ -42,6 +42,19 @@ class FixMaterialAlphaModeOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class EnableShowBackfaceOperator(bpy.types.Operator):
+    bl_idname = "xeiosshader.enable_show_backface"
+    bl_label = "Enable Show Backface"
+    bl_description = (
+        "For the Material, enable Show Backface (for accurate display in Eevee)"
+    )
+
+    def execute(self, context):
+        material = context.active_object.active_material
+        material.show_transparent_back = True
+        return {"FINISHED"}
+
+
 class XeiosShaderNode(ShaderNodeCustomGroup):
     bl_name = "XeiosShaderNode"
     bl_label = "Xeios Shader"
@@ -49,26 +62,22 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
     shadingtypes = [
         ("SHADED", "Shaded", "Regular shading"),
         ("UNSHADED", "Unshaded", "Unshaded/full brightness"),
+        (
+            "VERTEXCOLORS",
+            "Vertex colors",
+            "Use mesh's Color Attributes to color the vertices",
+        ),
     ]
 
     blendtypes = [
-        ("NORMAL", "Normal", "Regular blend"),
+        ("MIX", "Mix", "Regular blend"),
         ("ADD", "Add", "Additive blend"),
-        ("MULTIPLY", "Multiply", "Multiply blend"),
+        (
+            "INVMULTIPLY",
+            "InvMultiply",
+            "Multiply by inverse blend (displays wrong in Eevee/Cycles)",
+        ),
         ("SUBTRACT", "Subtract", "Subtractive blend"),
-    ]
-
-    colormodes = [
-        (
-            "DIFFUSESPECULAR",
-            "Diffuse + Specular",
-            "Use diffuse and specular colors",
-        ),
-        (
-            "VERTEXCOLORS",
-            "Vertex Colors",
-            "Use mesh's Color Attributes to color the vertices",
-        ),
     ]
 
     def vertexcolor_items(self, context):
@@ -81,22 +90,18 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
 
     select_shadingtype: EnumProperty(description="Shading type", items=shadingtypes)
     select_blendtype: EnumProperty(description="Blend type", items=blendtypes)
-    select_colormode: EnumProperty(
-        description="Color mode",
-        items=colormodes,
-    )
     select_diffusecolor: FloatVectorProperty(
         name="",
-        description="Diffuse color",
+        description="Diffuse color (doesn't display in Eevee/Cycles)",
         subtype="COLOR",
-        size=4,
+        size=3,
         min=0.0,
         max=1.0,
-        default=(1.0, 1.0, 1.0, 1.0),
+        default=(1.0, 1.0, 1.0),
     )
     select_specularcolor: FloatVectorProperty(
         name="",
-        description="Specular color",
+        description="Specular color (doesn't display in Eevee/Cycles)",
         subtype="COLOR",
         size=3,
         min=0.0,
@@ -104,7 +109,27 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
         default=(1.0, 1.0, 1.0),
     )
     select_specularexp: FloatProperty(
-        name="", description="Specular exponent", min=0.0, max=1024.0, default=1.0
+        name="",
+        description="Specular exponent (doesn't display in Eevee/Cycles)",
+        min=0.0,
+        max=1024.0,
+        default=1.0,
+    )
+    select_basecolor: FloatVectorProperty(
+        name="",
+        description="Base material color",
+        subtype="COLOR",
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(1.0, 1.0, 1.0),
+    )
+    select_basealpha: FloatProperty(
+        name="",
+        description="Base material alpha",
+        min=0.0,
+        max=1.0,
+        default=1.0,
     )
     select_vertexcolors: EnumProperty(
         name="",
@@ -135,28 +160,37 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
         self.node_tree.nodes.new("NodeGroupOutput")
         self._create_node_tree()
         self._reconnect_node_tree()
-        self.width = 200
+        self.width = 260
 
     def draw_buttons(self, context, layout):
         row = layout.row()
-        row.alert = self.select_shadingtype == "None"
-        row.prop(self, "select_shadingtype", text="")
-
-        row = layout.row()
-        row.alert = self.select_blendtype == "None"
-        row.prop(self, "select_blendtype", text="")
-
-        box = layout.box()
+        box = row.box()
         row = box.row()
-        row.alert = self.select_colormode == "None"
-        row.prop(self, "select_colormode", text="")
-
-        if self.select_colormode == "DIFFUSESPECULAR":
-            self._draw_diffusespecular(box)
-        elif self.select_colormode == "VERTEXCOLORS":
+        row.alert = self.select_shadingtype == "None"
+        row.prop(self, "select_shadingtype", expand=True)
+        if self.select_shadingtype == "SHADED":
+            self._draw_shadedcolors(box)
+        elif self.select_shadingtype == "UNSHADED":
+            self._draw_unshadedcolors(box)
+        elif self.select_shadingtype == "VERTEXCOLORS":
             self._draw_vertexcolors(context, box)
 
-        box = layout.box()
+        row = layout.row()
+        box = row.box()
+        row = box.row()
+        row.alert = self.select_blendtype == "None"
+        row.prop(self, "select_blendtype", expand=True)
+        row = box.row()
+        row.prop(self, "select_alpha", text="Enable alpha transparency")
+        self._draw_needs_mat_alpha_mode(
+            context, box, self.select_blendtype, self.select_alpha
+        )
+        self._draw_needs_show_backface(
+            context, box, self.select_blendtype, self.select_alpha
+        )
+
+        row = layout.row()
+        box = row.box()
         row = box.row()
         row.prop(self, "select_teximage", text="")
         self._draw_needs_channel_packed(
@@ -165,14 +199,7 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
         row = box.row()
         row.prop(self, "select_texreflect", text="Reflective")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "select_alpha", text="Alpha transparency")
-        self._draw_needs_mat_alpha_mode(
-            context, box, self.select_blendtype, self.select_alpha
-        )
-
-    def _draw_diffusespecular(self, box):
+    def _draw_shadedcolors(self, box):
         row = box.row()
         row.prop(self, "select_diffusecolor", text="Diffuse")
 
@@ -181,6 +208,16 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
         row.prop(self, "select_specularcolor", text="Specular")
         column = row.column()
         column.prop(self, "select_specularexp", text="")
+
+        row = box.row()
+        row.prop(self, "select_basealpha", text="Base alpha", slider=True)
+
+    def _draw_unshadedcolors(self, box):
+        row = box.row()
+        row.prop(self, "select_basecolor", text="Base color")
+
+        row = box.row()
+        row.prop(self, "select_basealpha", text="Base alpha", slider=True)
 
     def _draw_vertexcolors(self, context, box):
         row = box.row()
@@ -195,7 +232,7 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
         self, box, select_teximage, select_blendtype, select_alpha
     ):
         image_name = select_teximage.name if select_teximage else ""
-        needs_channel_packed = select_blendtype in ("MULTIPLY", "SUBTRACT") or (
+        needs_channel_packed = select_blendtype in ("INVMULTIPLY", "SUBTRACT") or (
             not select_alpha and select_blendtype != "ADD"
         )
         is_channel_packed = (
@@ -217,7 +254,7 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
     def _draw_needs_mat_alpha_mode(self, context, box, select_blendtype, select_alpha):
         needs_alphablend = select_alpha or select_blendtype in (
             "ADD",
-            "MULTIPLY",
+            "INVMULTIPLY",
             "SUBTRACT",
         )
         needs_opaque = not needs_alphablend
@@ -237,6 +274,23 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
                 "xeiosshader.fix_material_alpha_mode", text="Click here to fix this"
             )
             op_props.needs_opaque = needs_opaque
+
+    def _draw_needs_show_backface(self, context, box, select_blendtype, select_alpha):
+        needs_show_backface = select_alpha or select_blendtype in (
+            "ADD",
+            "INVMULTIPLY",
+            "SUBTRACT",
+        )
+        has_show_backface = context.active_object.active_material.show_transparent_back
+        if needs_show_backface and not has_show_backface:
+            row = box.row()
+            row.alert = True
+            row.label(text="Material should have Show Backface enabled")
+            row = box.row()
+            row.alert = True
+            row.operator(
+                "xeiosshader.enable_show_backface", text="Click here to fix this"
+            )
 
     def copy(self, node: "XeiosShaderNode"):
         self.node_tree = node.node_tree.copy()
