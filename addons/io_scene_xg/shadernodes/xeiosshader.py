@@ -252,6 +252,8 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
             op_props.image_name = image_name
 
     def _draw_needs_mat_alpha_mode(self, context, box, select_blendtype, select_alpha):
+        if context.scene.render.engine != "BLENDER_EEVEE":
+            return
         needs_alphablend = select_alpha or select_blendtype in (
             "ADD",
             "INVMULTIPLY",
@@ -276,6 +278,8 @@ class XeiosShaderNode(ShaderNodeCustomGroup):
             op_props.needs_opaque = needs_opaque
 
     def _draw_needs_show_backface(self, context, box, select_blendtype, select_alpha):
+        if context.scene.render.engine != "BLENDER_EEVEE":
+            return
         needs_show_backface = select_alpha or select_blendtype in (
             "ADD",
             "INVMULTIPLY",
