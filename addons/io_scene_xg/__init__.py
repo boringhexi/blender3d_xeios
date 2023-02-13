@@ -20,7 +20,7 @@ from nodeitems_utils import (
     unregister_node_categories,
 )
 
-from .shadernodes.xeiosshader import (
+from .materials.xeiosshadernode import (
     EnableShowBackfaceOperator,
     FixMaterialAlphaModeOperator,
     MakeImageChannelPackedOperator,
@@ -37,8 +37,8 @@ if "_this_file_was_already_loaded" in locals():
 
     # Order matters. Reload module B before reloading module A that imports module B
     modules_to_reload = (
-        ".shadernodes.xeiosshader",
-        ".shadernodes",
+        ".materials.xeiosshadernode",
+        ".materials",
         ".xg.xgerrors",
         ".xg.xganimsep",
         ".xg.xgscene",
