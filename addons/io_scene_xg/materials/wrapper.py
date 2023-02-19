@@ -2,7 +2,6 @@
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
 
 # Potential improvements:
-# - combine MyShaderWrapper into MyShaderPrincipledBSDFWrapper, giving me a single class
 # - slim down the texture stuff down to what it's meant to do: only texture linked to
 #       Base Color on import, don't care about links at all on export
 #   - this may involve folding that MyShaderImageTextureWrapper functionality into my
@@ -77,16 +76,39 @@ def node_search_by_type(starting_node, node_type):
     return ret
 
 
-class MyShaderWrapper:
+class MyPrincipledBSDFWrapper:
     """
-    Base class with minimal common ground for all types of shader interfaces we may want/need to implement.
+    Hard coded shader setup, based in Principled BSDF. Adjusted for use with Xeios
+    materials. Should cover most common cases on import, and gives a basic nodal shaders
+    support for export.
 
-    Difference from bpy's ShaderWrapper: location of the texcoord node on the grid
+    Differences from original PrincipledBSDFWrapper:
+      - wrapping existing nodes is less strict, nodes don't have to be connected in such
+        an exact way.
+      - searches for and exposes more node types
+      - different placement of nodes on the grid
+
+    Supports basic diffuse/spec/, transparency, textures, vertex colors, and texture
+        coordinate mode.
+
+    Supported usage: Generally speaking, it works within its intended usage and may have
+        strange results outside of that.
+        - wrap a blank node material with is_readonly=False. This creates a new nodetree
+            which can then be populated with imported values
+                - wrapping an already-populated nodetree may have strange results.
+        - wrap an existing node material with is_readonly=True. This searches for nodes
+            and exposes the nodes it finds, whose values can then be exported.
+            - wrapping an existing nodetree and attempting to access multiple textures
+                may have strange results. x.node_imagetexture_existing, the first
+                 texture found by the node search, is considered the "canon" texture.
     """
 
-    # The two mandatory nodes any children class should support.
     NODES_LIST = (
         "node_out",
+        "node_principled_bsdf",
+        "node_diffuse_bsdf",
+        "node_color_attribute",
+        "node_imagetexture_existing",
         "_node_texcoords",
     )
 
@@ -132,95 +154,11 @@ class MyShaderWrapper:
             self.use_nodes = use_nodes
         self.update()
 
-    def update(self):  # Should be re-implemented by children classes...
+    def update(self):
         for node in self.NODES_LIST:
             setattr(self, node, None)
         self._textures = {}
         self._grid_locations = set()
-
-    def use_nodes_get(self):
-        return self.material.use_nodes
-
-    @_set_check
-    def use_nodes_set(self, val):
-        self.material.use_nodes = val
-        self.update()
-
-    use_nodes = property(use_nodes_get, use_nodes_set)
-
-    def node_texcoords_get(self):
-        if not self.use_nodes:
-            return None
-        if self._node_texcoords is ...:
-            # Running only once, trying to find a valid texcoords node.
-            for n in self.material.node_tree.nodes:
-                if n.bl_idname == "ShaderNodeTexCoord":
-                    self._node_texcoords = n
-                    self._grid_to_location(0, 0, ref_node=n)
-                    break
-            if self._node_texcoords is ...:
-                self._node_texcoords = None
-        if self._node_texcoords is None and not self.is_readonly:
-            tree = self.material.node_tree
-            nodes = tree.nodes
-            # links = tree.links
-
-            node_texcoords = nodes.new(type="ShaderNodeTexCoord")
-            node_texcoords.label = "Texture Coords"
-            self._grid_to_location(-1, 1, dst_node=node_texcoords)
-            self._node_texcoords = node_texcoords
-        return self._node_texcoords
-
-    node_texcoords = property(node_texcoords_get)
-
-
-class MyPrincipledBSDFWrapper(MyShaderWrapper):
-    """
-    Hard coded shader setup, based in Principled BSDF. Adjusted for use with Xeios
-    materials. Should cover most common cases on import, and gives a basic nodal shaders
-    support for export.
-
-    Differences from original PrincipledBSDFWrapper:
-      - wrapping existing nodes is less strict, nodes don't have to be connected in such
-        an exact way.
-      - searches for and exposes more node types
-
-    Supports basic diffuse/spec/, transparency, textures, vertex colors, and texture
-        coordinate mode.
-
-    Supported usage: Generally speaking, it works within its intended usage and may have
-        strange results outside of that.
-        - wrap a blank node material with is_readonly=False. This creates a new nodetree
-            which can then be populated with imported values
-                - wrapping an already-populated nodetree may have strange results.
-        - wrap an existing node material with is_readonly=True. This searches for nodes
-            and exposes the nodes it finds, whose values can then be exported.
-            - wrapping an existing nodetree and attempting to access multiple textures
-                may have strange results. x.node_imagetexture_existing, the first
-                 texture found by the node search, is considered the "canon" texture.
-    """
-
-    NODES_LIST = (
-        "node_out",
-        "node_principled_bsdf",
-        "node_diffuse_bsdf",
-        "node_color_attribute",
-        "node_imagetexture_existing",
-    )
-
-    __slots__ = (
-        "is_readonly",
-        "material",
-        *NODES_LIST,
-    )
-
-    NODES_LIST = MyShaderWrapper.NODES_LIST + NODES_LIST
-
-    def __init__(self, material, is_readonly=True, use_nodes=True):
-        super(MyPrincipledBSDFWrapper, self).__init__(material, is_readonly, use_nodes)
-
-    def update(self):
-        super(MyPrincipledBSDFWrapper, self).update()
 
         if not self.use_nodes:
             return
@@ -308,6 +246,41 @@ class MyPrincipledBSDFWrapper(MyShaderWrapper):
         self.node_color_attribute = node_color_attribute
         self.node_imagetexture_existing = node_imagetexture_existing
         self._node_texcoords = ...  # lazy initialization
+
+    def use_nodes_get(self):
+        return self.material.use_nodes
+
+    @_set_check
+    def use_nodes_set(self, val):
+        self.material.use_nodes = val
+        self.update()
+
+    use_nodes = property(use_nodes_get, use_nodes_set)
+
+    def node_texcoords_get(self):
+        if not self.use_nodes:
+            return None
+        if self._node_texcoords is ...:
+            # Running only once, trying to find a valid texcoords node.
+            for n in self.material.node_tree.nodes:
+                if n.bl_idname == "ShaderNodeTexCoord":
+                    self._node_texcoords = n
+                    self._grid_to_location(0, 0, ref_node=n)
+                    break
+            if self._node_texcoords is ...:
+                self._node_texcoords = None
+        if self._node_texcoords is None and not self.is_readonly:
+            tree = self.material.node_tree
+            nodes = tree.nodes
+            # links = tree.links
+
+            node_texcoords = nodes.new(type="ShaderNodeTexCoord")
+            node_texcoords.label = "Texture Coords"
+            self._grid_to_location(-1, 1, dst_node=node_texcoords)
+            self._node_texcoords = node_texcoords
+        return self._node_texcoords
+
+    node_texcoords = property(node_texcoords_get)
 
     # --------------------------------------------------------------------
     # Base Color.
