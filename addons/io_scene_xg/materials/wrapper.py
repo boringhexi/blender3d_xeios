@@ -2,10 +2,6 @@
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
 
 # Potential improvements:
-# - slim down the texture stuff down to what it's meant to do: only texture linked to
-#       Base Color on import, don't care about links at all on export
-#   - this may involve folding that MyShaderImageTextureWrapper functionality into my
-#       Principled wrapper
 # - After combining classes, can make all node positioning relative to the output node
 # - lazy initialization for Color Attribute node, allow the import of vertex colors to
 #       be actually visible in the material output
@@ -98,9 +94,6 @@ class MyPrincipledBSDFWrapper:
                 - wrapping an already-populated nodetree may have strange results.
         - wrap an existing node material with is_readonly=True. This searches for nodes
             and exposes the nodes it finds, whose values can then be exported.
-            - wrapping an existing nodetree and attempting to access multiple textures
-                may have strange results. x.node_imagetexture_existing, the first
-                 texture found by the node search, is considered the "canon" texture.
     """
 
     NODES_LIST = (
@@ -108,14 +101,14 @@ class MyPrincipledBSDFWrapper:
         "node_principled_bsdf",
         "node_diffuse_bsdf",
         "node_color_attribute",
-        "node_imagetexture_existing",
+        "_node_image_texture",
         "_node_texcoords",
     )
 
     __slots__ = (
         "is_readonly",
+        "use_alpha",
         "material",
-        "_textures",
         "_grid_locations",
         *NODES_LIST,
     )
@@ -147,9 +140,10 @@ class MyPrincipledBSDFWrapper:
             dst_node.width = min(dst_node.width, self._col_size - 20)
         return loc
 
-    def __init__(self, material, is_readonly=True, use_nodes=True):
+    def __init__(self, material, is_readonly=True, use_nodes=True, use_alpha=False):
         self.is_readonly = is_readonly
         self.material = material
+        self.use_alpha = use_alpha
         if not is_readonly:
             self.use_nodes = use_nodes
         self.update()
@@ -157,7 +151,6 @@ class MyPrincipledBSDFWrapper:
     def update(self):
         for node in self.NODES_LIST:
             setattr(self, node, None)
-        self._textures = {}
         self._grid_locations = set()
 
         if not self.use_nodes:
@@ -183,7 +176,7 @@ class MyPrincipledBSDFWrapper:
                 if n.bl_idname == "ShaderNodeOutputMaterial" and n.inputs[0].is_linked:
                     node_out = n
                     break
-        # starting from Material Output, for Principled BSDF node
+        # starting from Material Output, search for the Principled BSDF node
         node_principled_bsdf = node_diffuse_bsdf = None
         if node_out is not None:
             node_principled_bsdf = node_search_by_type(
@@ -191,14 +184,14 @@ class MyPrincipledBSDFWrapper:
             )
             # (And also Diffuse BSDF node, though it will be prioritized lower)
             node_diffuse_bsdf = node_search_by_type(node_out, "ShaderNodeBsdfDiffuse")
-        # from there get the Image Texture
-        node_imagetexture_existing = None
+        # from there, search for the Image Texture
+        node_image_texture = None
         if node_principled_bsdf is not None:
-            node_imagetexture_existing = node_search_by_type(
+            node_image_texture = node_search_by_type(
                 node_principled_bsdf, "ShaderNodeTexImage"
             )
         elif node_diffuse_bsdf is not None:
-            node_imagetexture_existing = node_search_by_type(
+            node_image_texture = node_search_by_type(
                 node_diffuse_bsdf, "ShaderNodeTexImage"
             )
         # And the Color Attribute (vertex colors) in case we need it
@@ -244,7 +237,7 @@ class MyPrincipledBSDFWrapper:
 
         self.node_diffuse_bsdf = node_diffuse_bsdf
         self.node_color_attribute = node_color_attribute
-        self.node_imagetexture_existing = node_imagetexture_existing
+        self._node_image_texture = node_image_texture
         self._node_texcoords = ...  # lazy initialization
 
     def use_nodes_get(self):
@@ -257,7 +250,67 @@ class MyPrincipledBSDFWrapper:
 
     use_nodes = property(use_nodes_get, use_nodes_set)
 
-    def node_texcoords_get(self):
+    def node_image_texture_get(self):
+        if not self.use_nodes:
+            return None
+        elif self._node_image_texture is not None:
+            return self._node_image_texture
+        elif self.is_readonly:
+            return None
+
+        # create new Image Texture...
+        tree = self.material.node_tree
+        nodes = tree.nodes
+        node_image_texture = tree.nodes.new(type="ShaderNodeTexImage")
+        self._grid_to_location(
+            -1,
+            0,
+            dst_node=node_image_texture,
+            ref_node=self.node_principled_bsdf,
+        )
+        # ... and link to Principled BSDF
+        tree.links.new(
+            node_image_texture.outputs["Color"],
+            self.node_principled_bsdf.inputs["Base Color"],
+        )
+        if self.use_alpha:
+            tree.links.new(
+                node_image_texture.outputs["Alpha"],
+                self.node_principled_bsdf.inputs["Alpha"],
+            )
+
+        self._node_image_texture = node_image_texture
+        return self._node_texcoords
+
+    node_image_texture = property(node_image_texture_get)
+
+    def image_get(self):
+        return (
+            self.node_image_texture.image
+            if self.node_image_texture is not None
+            else None
+        )
+
+    @_set_check
+    def image_set(self, image):
+        self.node_image_texture.image = image
+
+    image = property(image_get, image_set)
+
+    def projection_get(self):
+        return (
+            self.node_image_texture.projection
+            if self.node_image_texture is not None
+            else "FLAT"
+        )
+
+    @_set_check
+    def projection_set(self, projection):
+        self.node_image_texture.projection = projection
+
+    projection = property(projection_get, projection_set)
+
+    def texcoords_get(self):
         if not self.use_nodes:
             return None
         if self._node_texcoords is ...:
@@ -269,18 +322,37 @@ class MyPrincipledBSDFWrapper:
                     break
             if self._node_texcoords is ...:
                 self._node_texcoords = None
+
         if self._node_texcoords is None and not self.is_readonly:
+            # Create new Texture Coordinates node...
             tree = self.material.node_tree
-            nodes = tree.nodes
-            # links = tree.links
-
-            node_texcoords = nodes.new(type="ShaderNodeTexCoord")
-            node_texcoords.label = "Texture Coords"
+            node_texcoords = tree.nodes.new(type="ShaderNodeTexCoord")
+            node_texcoords.label = "Texture Coordinates"
             self._grid_to_location(-1, 1, dst_node=node_texcoords)
+            # ... and link it to the image texture node
+            socket_dst = self.node_image_texture.inputs["Vector"]
+            socket_src = node_texcoords.outputs["UV"]
+            tree.links.new(socket_src, socket_dst)
             self._node_texcoords = node_texcoords
-        return self._node_texcoords
 
-    node_texcoords = property(node_texcoords_get)
+        if self.node_image_texture is not None:
+            socket = self.node_image_texture.inputs["Vector"]
+            if socket.is_linked:
+                return socket.links[0].from_socket.name
+        return "UV"
+
+    @_set_check
+    def texcoords_set(self, texcoords):
+        # Image texture node already defaults to UVs, no extra node needed.
+        if texcoords == "UV":
+            return
+        self.texcoords_get()  # make sure texcoord node exists first
+        tree = self.material.node_tree
+        node_dst = self.node_image_texture
+        socket_src = self._node_texcoords.outputs[texcoords]
+        tree.links.new(socket_src, node_dst.inputs["Vector"])
+
+    texcoords = property(texcoords_get, texcoords_set)
 
     # --------------------------------------------------------------------
     # Base Color.
@@ -299,18 +371,6 @@ class MyPrincipledBSDFWrapper:
             self.node_principled_bsdf.inputs["Base Color"].default_value = color
 
     base_color = property(base_color_get, base_color_set)
-
-    def base_color_texture_get(self):
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return None
-        return MyShaderImageTextureWrapper(
-            self,
-            self.node_principled_bsdf,
-            self.node_principled_bsdf.inputs["Base Color"],
-            grid_row_diff=0,
-        )
-
-    base_color_texture = property(base_color_texture_get)
 
     # --------------------------------------------------------------------
     # Specular.
@@ -375,253 +435,6 @@ class MyPrincipledBSDFWrapper:
 
     alpha = property(alpha_get, alpha_set)
 
-    # Will only be used as gray-scale one...
-    def alpha_texture_get(self):
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return None
-        return MyShaderImageTextureWrapper(
-            self,
-            self.node_principled_bsdf,
-            self.node_principled_bsdf.inputs["Alpha"],
-            use_alpha=True,
-            grid_row_diff=-1,
-            colorspace_name="Non-Color",
-        )
-
-    alpha_texture = property(alpha_texture_get)
-
-    # --------------------------------------------------------------------
-    # Emission color.
-
-    def emission_color_get(self):
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return Color((0.0, 0.0, 0.0))
-        return rgba_to_rgb(self.node_principled_bsdf.inputs["Emission"].default_value)
-
-    @_set_check
-    def emission_color_set(self, color):
-        if self.use_nodes and self.node_principled_bsdf is not None:
-            color = values_clamp(color, 0.0, 1000000.0)
-            color = rgb_to_rgba(color)
-            self.node_principled_bsdf.inputs["Emission"].default_value = color
-
-    emission_color = property(emission_color_get, emission_color_set)
-
-    def emission_color_texture_get(self):
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return None
-        return MyShaderImageTextureWrapper(
-            self,
-            self.node_principled_bsdf,
-            self.node_principled_bsdf.inputs["Emission"],
-            grid_row_diff=0,
-        )
-
-    emission_color_texture = property(emission_color_texture_get)
-
-    def emission_strength_get(self):
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return 1.0
-        return self.node_principled_bsdf.inputs["Emission Strength"].default_value
-
-    @_set_check
-    def emission_strength_set(self, value):
-        value = values_clamp(value, 0.0, 1000000.0)
-        if self.use_nodes and self.node_principled_bsdf is not None:
-            self.node_principled_bsdf.inputs["Emission Strength"].default_value = value
-
-    emission_strength = property(emission_strength_get, emission_strength_set)
-
-
-class MyShaderImageTextureWrapper:
-    """
-    Generic 'image texture'-like wrapper, handling image node and texture coordinates.
-
-    Differs from Blender's ShaderImageTextureWrapper in that it can be initialized with
-    an arbitrary ShaderNodeTexImage. As such, the Image Texture node doesn't need to be
-    directly connected to the Principled BSDF node.
-    """
-
-    # Note: this class assumes we are using nodes, otherwise it should never be used...
-
-    NODES_LIST = (
-        "node_dst",
-        "socket_dst",
-        "_node_image",
-    )
-
-    __slots__ = (
-        "owner_shader",
-        "is_readonly",
-        "grid_row_diff",
-        "use_alpha",
-        "colorspace_is_data",
-        "colorspace_name",
-        *NODES_LIST,
-    )
-
-    def __new__(
-        cls,
-        owner_shader: MyPrincipledBSDFWrapper,
-        node_dst,
-        socket_dst,
-        *_args,
-        **_kwargs
-    ):
-        # If owner_shader already has a wrapped texture with this src/dst, return that
-        instance = owner_shader._textures.get((node_dst, socket_dst), None)
-        if instance is not None:
-            return instance
-        instance = super(MyShaderImageTextureWrapper, cls).__new__(cls)
-        owner_shader._textures[(node_dst, socket_dst)] = instance
-        return instance
-
-    def __init__(
-        self,
-        owner_shader: MyPrincipledBSDFWrapper,
-        node_dst,
-        socket_dst,
-        existing_texnode=None,
-        grid_row_diff=0,
-        use_alpha=False,
-        colorspace_is_data=...,
-        colorspace_name=...,
-    ):
-        self.owner_shader = owner_shader
-        self.is_readonly = owner_shader.is_readonly
-        self.node_dst = node_dst
-        self.socket_dst = socket_dst
-        self.grid_row_diff = grid_row_diff
-        self.use_alpha = use_alpha
-        self.colorspace_is_data = colorspace_is_data
-        self.colorspace_name = colorspace_name
-
-        self._node_image = ...
-
-        # tree = node_dst.id_data
-        # nodes = tree.nodes
-        # links = tree.links
-
-        if owner_shader.node_imagetexture_existing is not None:
-            self._node_image = owner_shader.node_imagetexture_existing
-        elif socket_dst.is_linked:
-            # grab and store texture node connected to the provided socket_dst
-            from_node = socket_dst.links[0].from_node
-            if from_node.bl_idname == "ShaderNodeTexImage":
-                self._node_image = from_node
-
-        if self.node_image is not None:
-            # grab and store the texture node's texture coordinate node if one exists
-            socket_dst = self.node_image.inputs["Vector"]
-            if socket_dst.is_linked:
-                from_node = socket_dst.links[0].from_node
-                if from_node.bl_idname == "ShaderNodeMapping":
-                    self._node_mapping = from_node
-
-    # --------------------------------------------------------------------
-    # Image.
-
-    def node_image_get(self):
-        if self._node_image is ...:
-            # Running only once, trying to find a valid image node.
-            if self.socket_dst.is_linked:
-                node_image = self.socket_dst.links[0].from_node
-                if node_image.bl_idname == "ShaderNodeTexImage":
-                    self._node_image = node_image
-                    self.owner_shader._grid_to_location(0, 0, ref_node=node_image)
-            if self._node_image is ...:
-                self._node_image = None
-        if self._node_image is None and not self.is_readonly:
-            tree = self.owner_shader.material.node_tree
-
-            node_image = tree.nodes.new(type="ShaderNodeTexImage")
-            self.owner_shader._grid_to_location(
-                -1,
-                0 + self.grid_row_diff,
-                dst_node=node_image,
-                ref_node=self.node_dst,
-            )
-
-            tree.links.new(
-                node_image.outputs["Alpha" if self.use_alpha else "Color"],
-                self.socket_dst,
-            )
-            if self.use_alpha:
-                self.owner_shader.material.blend_method = "BLEND"
-
-            self._node_image = node_image
-        return self._node_image
-
-    node_image = property(node_image_get)
-
-    def image_get(self):
-        return self.node_image.image if self.node_image is not None else None
-
-    @_set_check
-    def image_set(self, image):
-        if self.colorspace_is_data is not ...:
-            if (
-                image.colorspace_settings.is_data != self.colorspace_is_data
-                and image.users >= 1
-            ):
-                image = image.copy()
-            image.colorspace_settings.is_data = self.colorspace_is_data
-        if self.colorspace_name is not ...:
-            if (
-                image.colorspace_settings.name != self.colorspace_name
-                and image.users >= 1
-            ):
-                image = image.copy()
-            image.colorspace_settings.name = self.colorspace_name
-        if self.use_alpha:
-            # Try to be smart, and only use image's alpha output if image actually has alpha data.
-            tree = self.owner_shader.material.node_tree
-            if image.channels < 4 or image.depth in {24, 8}:
-                tree.links.new(self.node_image.outputs["Color"], self.socket_dst)
-            else:
-                tree.links.new(self.node_image.outputs["Alpha"], self.socket_dst)
-        self.node_image.image = image
-
-    image = property(image_get, image_set)
-
-    def projection_get(self):
-        return self.node_image.projection if self.node_image is not None else "FLAT"
-
-    @_set_check
-    def projection_set(self, projection):
-        self.node_image.projection = projection
-
-    projection = property(projection_get, projection_set)
-
-    def texcoords_get(self):
-        if self.node_image is not None:
-            socket = self.node_image.inputs["Vector"]
-            if socket.is_linked:
-                return socket.links[0].from_socket.name
-        return "UV"
-
-    @_set_check
-    def texcoords_set(self, texcoords):
-        # Image texture node already defaults to UVs, no extra node needed.
-        if texcoords == "UV":
-            return
-        tree = self.node_image.id_data
-        links = tree.links
-        node_dst = self.node_image
-        socket_src = self.owner_shader.node_texcoords.outputs[texcoords]
-        links.new(socket_src, node_dst.inputs["Vector"])
-
-    texcoords = property(texcoords_get, texcoords_set)
-
-    def extension_get(self):
-        return self.node_image.extension if self.node_image is not None else "REPEAT"
-
-    @_set_check
-    def extension_set(self, extension):
-        self.node_image.extension = extension
-
-    extension = property(extension_get, extension_set)
-
 
 def main():
     import bpy
@@ -630,9 +443,9 @@ def main():
     # ma = bpy.context.active_object.active_material
     # ma_wrap = MyPrincipledBSDFWrapper(ma, is_readonly=False)
     # # Access a texture to create the texture node
-    # tx_wrap = ma_wrap.base_color_texture
+    # texture = ma_wrap.node_image_texture
     # # Assign a texcoord mode to create the texture coordinate node
-    # tx_wrap.texcoords = "Reflection"
+    # ma_wrap.texcoords = "Reflection"
 
     # Example: Wrap around an existing read-only nodetree, exposes values to be exported
     ma = bpy.context.active_object.active_material
@@ -641,8 +454,8 @@ def main():
     print("Principled BSDF node: ", ma_wrap.node_principled_bsdf)
     print("Diffuse BSDF node: ", ma_wrap.node_diffuse_bsdf)
     print("Color Attribute node: ", ma_wrap.node_color_attribute)
-    print("Image Texture node: ", ma_wrap.node_imagetexture_existing)
-    print("Texcoord node: ", ma_wrap.node_texcoords)
+    print("Image Texture node: ", ma_wrap.node_image_texture)
+    print("Texcoords mode: ", ma_wrap.texcoords)
 
 
 if __name__ == "__main__":
