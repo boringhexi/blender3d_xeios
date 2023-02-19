@@ -1,16 +1,16 @@
 # This file contains code from:
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
 
-# Potential improvements:
-# - Better documentation explaining what nodes are searched for in readonly/export mode
-#       and what nodes are created (and when) in writable/import mode.
-#       (With better documentation, I can get rid of main() )
+from typing import Callable, Iterable, List, Optional, Sequence
+from typing import SupportsFloat as Numeric
+from typing import Tuple, Union
 
 import bpy
+from bpy.types import Image, Material, Node, ShaderNodeTexImage, ShaderNodeTree
 from mathutils import Color
 
 
-def _set_check(func):
+def _set_check(func: Callable) -> Callable:
     from functools import wraps
 
     @wraps(func)
@@ -23,23 +23,27 @@ def _set_check(func):
     return wrapper
 
 
-def rgb_to_rgba(rgb):
+def rgb_to_rgba(rgb: Sequence[Numeric]) -> List[Numeric]:
     return list(rgb) + [1.0]
 
 
-def rgba_to_rgb(rgba):
+def rgba_to_rgb(rgba: Sequence) -> Color:
     return Color((rgba[0], rgba[1], rgba[2]))
 
 
-# All clamping value shall follow Blender's defined min/max (check relevant node definition .c file).
-def values_clamp(val, minv, maxv):
+# All clamping value shall follow Blender's defined min/max
+# (check relevant node definition .c file).
+def values_clamp(
+    val: Union[Numeric, Iterable], minv: Numeric, maxv: Numeric
+) -> Union[Numeric, Tuple[Numeric]]:
+    """clamp a value or an iterable of values to between [minv,maxv] inclusive"""
     if hasattr(val, "__iter__"):
         return tuple(max(minv, min(maxv, v)) for v in val)
     else:
         return max(minv, min(maxv, val))
 
 
-def node_search_by_type(starting_node, node_type):
+def node_search_by_type(starting_node: Node, node_type: str) -> Optional[Node]:
     """search breadth-first through inputs starting from the chosen Blender node
 
     :param starting_node: node from which to start searching inputs
@@ -71,22 +75,17 @@ class MyPrincipledBSDFWrapper:
     materials. Should cover most common cases on import, and gives a basic nodal shaders
     support for export.
 
-    Differences from original PrincipledBSDFWrapper:
-      - wrapping existing nodes is less strict, nodes don't have to be connected in such
-        an exact way.
-      - searches for and exposes more node types
-      - different placement of nodes on the grid
-
-    Supports basic diffuse/spec/, transparency, textures, vertex colors, and texture
-        coordinate mode.
-
-    Supported usage: Generally speaking, it works within its intended usage and may have
-        strange results outside of that.
-        - wrap a blank node material with is_readonly=False. This creates a new nodetree
-            which can then be populated with imported values
-                - wrapping an already-populated nodetree may have strange results.
-        - wrap an existing node material with is_readonly=True. This searches for nodes
-            and exposes the nodes it finds, whose values can then be exported.
+    Supported usage:
+    - Wrap a new/blank node material with is_readonly=False. This creates a new nodetree
+        which can then be populated with imported values.
+            - Exposed nodes include material output and principled BSDF nodes, with the
+                dynamic on-access creation of image texture node. Can also access and
+                change base color, alpha, specular, roughness, texcoord mode, and image.
+    - wrap an existing node material with is_readonly=True. This searches for nodes
+        and exposes the nodes it finds, whose values can then be exported.
+            - Exposed nodes include material output, principled BSDF, diffuse BSDF,
+                color attribute, image texture. Can also access base color, alpha,
+                specular, roughness, texcoord mode, and image.
     """
 
     NODES_LIST = (
@@ -109,7 +108,13 @@ class MyPrincipledBSDFWrapper:
     _col_size = 300
     _row_size = 300
 
-    def _grid_to_location(self, x, y, dst_node=None, ref_node=None):
+    def _grid_to_location(
+        self,
+        x: int,
+        y: int,
+        dst_node: Optional[Node] = None,
+        ref_node: Optional[Node] = None,
+    ) -> Tuple:
         """convert grid coordinates to a location in the shader editor
 
         :param x: grid coordinate x (based on self._col_size)
@@ -141,7 +146,13 @@ class MyPrincipledBSDFWrapper:
             dst_node.width = min(dst_node.width, self._col_size - 20)
         return loc
 
-    def __init__(self, material, is_readonly=True, use_nodes=True, use_alpha=False):
+    def __init__(
+        self,
+        material: Material,
+        is_readonly: bool = True,
+        use_nodes: bool = True,
+        use_alpha: bool = False,
+    ) -> None:
         self.is_readonly = is_readonly
         self.material = material
         self.use_alpha = use_alpha
@@ -149,7 +160,7 @@ class MyPrincipledBSDFWrapper:
             self.use_nodes = use_nodes
         self.update()
 
-    def update(self):
+    def update(self) -> None:
         for node in self.NODES_LIST:
             setattr(self, node, None)
         self._grid_locations = set()
@@ -157,7 +168,7 @@ class MyPrincipledBSDFWrapper:
         if not self.use_nodes:
             return
 
-        tree = self.material.node_tree
+        tree: ShaderNodeTree = self.material.node_tree
 
         nodes = tree.nodes
         links = tree.links
@@ -243,17 +254,17 @@ class MyPrincipledBSDFWrapper:
             self._node_image_texture = ...  # lazy initialization
         self._node_texcoords = ...
 
-    def use_nodes_get(self):
+    def use_nodes_get(self) -> bool:
         return self.material.use_nodes
 
     @_set_check
-    def use_nodes_set(self, val):
+    def use_nodes_set(self, val) -> None:
         self.material.use_nodes = val
         self.update()
 
     use_nodes = property(use_nodes_get, use_nodes_set)
 
-    def node_image_texture_get(self):
+    def node_image_texture_get(self) -> Optional[ShaderNodeTexImage]:
         if not self.use_nodes:
             return None
         if self._node_image_texture is ...:
@@ -292,7 +303,7 @@ class MyPrincipledBSDFWrapper:
 
     node_image_texture = property(node_image_texture_get)
 
-    def image_get(self):
+    def image_get(self) -> Image:
         return (
             self.node_image_texture.image
             if self.node_image_texture is not None
@@ -300,12 +311,12 @@ class MyPrincipledBSDFWrapper:
         )
 
     @_set_check
-    def image_set(self, image):
+    def image_set(self, image: Image) -> None:
         self.node_image_texture.image = image
 
     image = property(image_get, image_set)
 
-    def projection_get(self):
+    def projection_get(self) -> str:
         return (
             self.node_image_texture.projection
             if self.node_image_texture is not None
@@ -313,14 +324,14 @@ class MyPrincipledBSDFWrapper:
         )
 
     @_set_check
-    def projection_set(self, projection):
+    def projection_set(self, projection: str) -> None:
         self.node_image_texture.projection = projection
 
     projection = property(projection_get, projection_set)
 
-    def texcoords_get(self):
+    def texcoords_get(self) -> str:
         if not self.use_nodes:
-            return None
+            return "UV"
 
         if self._node_texcoords is ...:
             if self._node_image_texture in (None, ...):
@@ -358,7 +369,7 @@ class MyPrincipledBSDFWrapper:
         return "UV"
 
     @_set_check
-    def texcoords_set(self, texcoords):
+    def texcoords_set(self, texcoords: str) -> None:
         # Image texture node already defaults to UVs, no extra node needed.
         if texcoords == "UV":
             return
@@ -373,13 +384,13 @@ class MyPrincipledBSDFWrapper:
     # --------------------------------------------------------------------
     # Base Color.
 
-    def base_color_get(self):
+    def base_color_get(self) -> Sequence[float]:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.diffuse_color
         return rgba_to_rgb(self.node_principled_bsdf.inputs["Base Color"].default_value)
 
     @_set_check
-    def base_color_set(self, color):
+    def base_color_set(self, color: Sequence[float]) -> None:
         color = values_clamp(color, 0.0, 1.0)
         color = rgb_to_rgba(color)
         self.material.diffuse_color = color
@@ -391,13 +402,13 @@ class MyPrincipledBSDFWrapper:
     # --------------------------------------------------------------------
     # Specular.
 
-    def specular_get(self):
+    def specular_get(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.specular_intensity
         return self.node_principled_bsdf.inputs["Specular"].default_value
 
     @_set_check
-    def specular_set(self, value):
+    def specular_set(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         self.material.specular_intensity = value
         if self.use_nodes and self.node_principled_bsdf is not None:
@@ -405,13 +416,13 @@ class MyPrincipledBSDFWrapper:
 
     specular = property(specular_get, specular_set)
 
-    def specular_tint_get(self):
+    def specular_tint_get(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return 0.0
         return self.node_principled_bsdf.inputs["Specular Tint"].default_value
 
     @_set_check
-    def specular_tint_set(self, value):
+    def specular_tint_set(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Specular Tint"].default_value = value
@@ -421,13 +432,13 @@ class MyPrincipledBSDFWrapper:
     # --------------------------------------------------------------------
     # Roughness (also sort of inverse of specular hardness...).
 
-    def roughness_get(self):
+    def roughness_get(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.roughness
         return self.node_principled_bsdf.inputs["Roughness"].default_value
 
     @_set_check
-    def roughness_set(self, value):
+    def roughness_set(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         self.material.roughness = value
         if self.use_nodes and self.node_principled_bsdf is not None:
@@ -438,13 +449,13 @@ class MyPrincipledBSDFWrapper:
     # --------------------------------------------------------------------
     # Transparency settings.
 
-    def alpha_get(self):
+    def alpha_get(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return 1.0
         return self.node_principled_bsdf.inputs["Alpha"].default_value
 
     @_set_check
-    def alpha_set(self, value):
+    def alpha_set(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Alpha"].default_value = value
