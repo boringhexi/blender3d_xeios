@@ -2,16 +2,9 @@
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
 
 # Potential improvements:
-# - After combining classes, can make all node positioning relative to the output node
-# - lazy initialization for Color Attribute node, allow the import of vertex colors to
-#       be actually visible in the material output
-#       - warning, this will require a Multiply Color setup with a texture that may or
-#           may not be there
 # - Better documentation explaining what nodes are searched for in readonly/export mode
 #       and what nodes are created (and when) in writable/import mode.
 #       (With better documentation, I can get rid of main() )
-# - Maybe clear material's nodes before doing is_readonly=False creation. Maybe do away
-#       with is_readonly and do like, import mode and export mode
 
 import bpy
 from mathutils import Color
@@ -117,6 +110,14 @@ class MyPrincipledBSDFWrapper:
     _row_size = 300
 
     def _grid_to_location(self, x, y, dst_node=None, ref_node=None):
+        """convert grid coordinates to a location in the shader editor
+
+        :param x: grid coordinate x (based on self._col_size)
+        :param y: grid coordinate y (based on self._row_size)
+        :param dst_node: node to move to the calculated location, if provided
+        :param ref_node: calculate location relative to this node
+        :return: (x,y) location, to be used in the shader editor
+        """
         if ref_node is not None:  # x and y are relative to this node location.
             nx = round(ref_node.location.x / self._col_size)
             ny = round(ref_node.location.y / self._row_size)
@@ -225,7 +226,9 @@ class MyPrincipledBSDFWrapper:
             # create new & move to an unoccupied grid location
             node_principled_bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
             node_principled_bsdf.label = "Principled BSDF"
-            self._grid_to_location(1, 1, dst_node=node_principled_bsdf)
+            self._grid_to_location(
+                -1, 0, dst_node=node_principled_bsdf, ref_node=node_out
+            )
             # Link
             links.new(
                 node_principled_bsdf.outputs["BSDF"], self.node_out.inputs["Surface"]
@@ -328,7 +331,9 @@ class MyPrincipledBSDFWrapper:
             tree = self.material.node_tree
             node_texcoords = tree.nodes.new(type="ShaderNodeTexCoord")
             node_texcoords.label = "Texture Coordinates"
-            self._grid_to_location(-1, 1, dst_node=node_texcoords)
+            self._grid_to_location(
+                -1, 0, dst_node=node_texcoords, ref_node=self.node_image_texture
+            )
             # ... and link it to the image texture node
             socket_dst = self.node_image_texture.inputs["Vector"]
             socket_src = node_texcoords.outputs["UV"]
