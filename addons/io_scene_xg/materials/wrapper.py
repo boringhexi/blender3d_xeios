@@ -233,15 +233,15 @@ class MyPrincipledBSDFWrapper:
             links.new(
                 node_principled_bsdf.outputs["BSDF"], self.node_out.inputs["Surface"]
             )
+
         self.node_principled_bsdf = node_principled_bsdf
-
-        # We won't create an Image Texture until it is first accessed, because some
-        # imported models may not have a texture
-
         self.node_diffuse_bsdf = node_diffuse_bsdf
         self.node_color_attribute = node_color_attribute
-        self._node_image_texture = node_image_texture
-        self._node_texcoords = ...  # lazy initialization
+        if node_image_texture is not None:
+            self._node_image_texture = node_image_texture
+        else:
+            self._node_image_texture = ...  # lazy initialization
+        self._node_texcoords = ...
 
     def use_nodes_get(self):
         return self.material.use_nodes
@@ -256,34 +256,39 @@ class MyPrincipledBSDFWrapper:
     def node_image_texture_get(self):
         if not self.use_nodes:
             return None
-        elif self._node_image_texture is not None:
-            return self._node_image_texture
-        elif self.is_readonly:
-            return None
+        if self._node_image_texture is ...:
+            # Running only once, trying to find a valid image texture node.
+            found = node_search_by_type(self.node_principled_bsdf, "ShaderNodeTexImage")
+            if found is not None:
+                self._grid_to_location(0, 0, ref_node=found)
+                self._node_image_texture = found
 
-        # create new Image Texture...
-        tree = self.material.node_tree
-        nodes = tree.nodes
-        node_image_texture = tree.nodes.new(type="ShaderNodeTexImage")
-        self._grid_to_location(
-            -1,
-            0,
-            dst_node=node_image_texture,
-            ref_node=self.node_principled_bsdf,
-        )
-        # ... and link to Principled BSDF
-        tree.links.new(
-            node_image_texture.outputs["Color"],
-            self.node_principled_bsdf.inputs["Base Color"],
-        )
-        if self.use_alpha:
-            tree.links.new(
-                node_image_texture.outputs["Alpha"],
-                self.node_principled_bsdf.inputs["Alpha"],
-            )
+        if self._node_image_texture is ...:
+            if self.is_readonly:
+                self._node_image_texture = None
+            else:
+                # Create new Image Texture ...
+                tree = self.material.node_tree
+                node_image_texture = tree.nodes.new(type="ShaderNodeTexImage")
+                self._grid_to_location(
+                    -1,
+                    0,
+                    dst_node=node_image_texture,
+                    ref_node=self.node_principled_bsdf,
+                )
+                # ... and link to Principled BSDF
+                tree.links.new(
+                    node_image_texture.outputs["Color"],
+                    self.node_principled_bsdf.inputs["Base Color"],
+                )
+                if self.use_alpha:
+                    tree.links.new(
+                        node_image_texture.outputs["Alpha"],
+                        self.node_principled_bsdf.inputs["Alpha"],
+                    )
+                self._node_image_texture = node_image_texture
 
-        self._node_image_texture = node_image_texture
-        return self._node_texcoords
+        return self._node_image_texture
 
     node_image_texture = property(node_image_texture_get)
 
