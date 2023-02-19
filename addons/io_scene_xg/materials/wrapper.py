@@ -321,19 +321,21 @@ class MyPrincipledBSDFWrapper:
     def texcoords_get(self):
         if not self.use_nodes:
             return None
-        if self._node_texcoords is ...:
-            # Running only once, trying to find a valid texcoords node.
-            for n in self.material.node_tree.nodes:
-                if n.bl_idname == "ShaderNodeTexCoord":
-                    self._node_texcoords = n
-                    self._grid_to_location(0, 0, ref_node=n)
-                    break
-            if self._node_texcoords is ...:
-                self._node_texcoords = None
 
-        if self._node_texcoords is None and not self.is_readonly:
-            # Create the Image Texture node if it doesn't exist yet
-            if self._node_image_texture is None:
+        if self._node_texcoords is ...:
+            if self._node_image_texture in (None, ...):
+                self._node_texcoords = None
+            else:
+                found = node_search_by_type(
+                    self._node_image_texture, "ShaderNodeTexCoord"
+                )
+                if found is not None:
+                    self._grid_to_location(0, 0, ref_node=found)
+                    self._node_texcoords = found
+
+        if self._node_texcoords is ... and not self.is_readonly:
+            # First, create the Image Texture node if it doesn't exist yet
+            if self._node_image_texture in (None, ...):
                 self.node_image_texture_get()
 
             # Create new Texture Coordinates node...
