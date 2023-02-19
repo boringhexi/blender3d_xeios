@@ -216,7 +216,7 @@ class MyPrincipledBSDFWrapper:
             node_out = nodes.new(type="ShaderNodeOutputMaterial")
             node_out.label = "Material Out"
             node_out.target = "ALL"
-            self._grid_to_location(2, 1, dst_node=node_out)
+            self._grid_to_location(1, 1, dst_node=node_out)
         self.node_out = node_out
 
         if node_principled_bsdf is not None:
@@ -327,6 +327,10 @@ class MyPrincipledBSDFWrapper:
                 self._node_texcoords = None
 
         if self._node_texcoords is None and not self.is_readonly:
+            # Create the Image Texture node if it doesn't exist yet
+            if self._node_image_texture is None:
+                self.node_image_texture_get()
+
             # Create new Texture Coordinates node...
             tree = self.material.node_tree
             node_texcoords = tree.nodes.new(type="ShaderNodeTexCoord")
