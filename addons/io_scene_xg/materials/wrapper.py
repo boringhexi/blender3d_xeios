@@ -2,7 +2,6 @@
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
 
 # Potential improvements:
-# - get_output_node() should favor current renderer, then "ALL", then other renderer
 # - combine MyShaderWrapper into MyShaderPrincipledBSDFWrapper, giving me a single class
 # - slim down the texture stuff down to what it's meant to do: only texture linked to
 #       Base Color on import, don't care about links at all on export
@@ -19,6 +18,7 @@
 # - Maybe clear material's nodes before doing is_readonly=False creation. Maybe do away
 #       with is_readonly and do like, import mode and export mode
 
+import bpy
 from mathutils import Color
 
 
@@ -233,11 +233,14 @@ class MyPrincipledBSDFWrapper(MyShaderWrapper):
         # --------------------------------------------------------------------
         # Wrap existing nodes.
 
-        # Get the Material Output node
-        node_out = None
-        if tree.active_output is not None:
+        # Get the active (or failing that, any) Material Output node
+        renderer = bpy.context.scene.render.engine
+        node_out = (
+            tree.get_output_node(renderer) if renderer in ("EEVEE", "CYCLES") else None
+        )
+        if node_out is None:
             node_out = tree.get_output_node("ALL")
-        else:
+        if node_out is None:
             for n in nodes:
                 if n.bl_idname == "ShaderNodeOutputMaterial" and n.inputs[0].is_linked:
                     node_out = n
