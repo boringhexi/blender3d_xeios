@@ -476,9 +476,6 @@ class XgImporter:
         And if xgdagmesh isn't really an XgDagMesh, return None and don't create
         anything in Blender.
 
-        Additional effects:
-        Also creates mesh's material, link material to mesh #TODO should be moved out
-
         :param dagmeshnode: XgDagMesh
         :param dagtransform: True if this xgDagMesh is transformed by an xgDagTransform.
             Only used to issue a warning if it's also being transformed by an xgEnvelope
@@ -505,10 +502,9 @@ class XgImporter:
             if hasattr(dagmeshnode, "inputMaterial"):
                 matnode = dagmeshnode.inputMaterial[0]
 
-                # if of type "xgMaterial", init as a regular material
-                # if matnode.xgnode_type == "xgMaterial":
+                # initialize from a xgMaterial, or take the first xgMaterial in a
+                # xgMultiPassMaterial and initialize from that
                 if matnode.xgnode_type in ("xgMaterial", "xgMultiPassMaterial"):
-                    # TODO for now, we handle regular mats and mpmats mostly the same.
                     if matnode.xgnode_type == "xgMultiPassMaterial":
                         self.warn(
                             f"We can't do multi-layer materials yet ({matnode}), "
@@ -527,12 +523,6 @@ class XgImporter:
                     # either way, add the material to this mesh
                     bpymeshdata.materials.append(bpymat)
                     bpymeshobj.active_material = bpymat
-
-                # if of type "xgMultiPassMaterial", init all its inputmaterials as nodes
-                elif matnode.xgnode_type == "xgMultiPassMaterial":
-                    # TODO handling mpmats differently is not a thing yet.
-                    self.warn(f"can't do mpmats yet, skipping {matnode}")
-                    pass
 
                 else:
                     raise XgImportError(
