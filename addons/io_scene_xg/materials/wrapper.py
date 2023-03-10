@@ -1,12 +1,23 @@
 # This file contains code from:
 # https://projects.blender.org/blender/blender/src/branch/main/release/scripts/modules/bpy_extras/node_shader_utils.py
+# https://projects.blender.org/blender/blender-addons/src/branch/main/io_scene_obj/import_obj.py
+# https://projects.blender.org/blender/blender-addons/src/branch/main/io_scene_obj/export_obj.py
 
+from math import sqrt
 from typing import Callable, Iterable, List, Optional, Sequence
 from typing import SupportsFloat as Numeric
 from typing import Tuple, Union
 
 import bpy
-from bpy.types import Image, Material, Node, ShaderNodeTexImage, ShaderNodeTree
+from bpy.types import (
+    Image,
+    Material,
+    Mesh,
+    Node,
+    ShaderNodeOutputMaterial,
+    ShaderNodeTexImage,
+    ShaderNodeTree,
+)
 from mathutils import Color
 
 
@@ -67,6 +78,100 @@ def node_search_by_type(starting_node: Node, node_type: str) -> Optional[Node]:
                 else:
                     queue.append(input_node)
     return ret
+
+
+def get_material_output_node(material: Material) -> Optional[ShaderNodeOutputMaterial]:
+    """Get the active (or failing that, any) Material Output node"""
+    renderer = bpy.context.scene.render.engine
+    tree: ShaderNodeTree = material.node_tree
+    node_out = (
+        tree.get_output_node(renderer) if renderer in ("EEVEE", "CYCLES") else None
+    )
+    if node_out is None:
+        node_out = tree.get_output_node("ALL")
+    if node_out is None:
+        for n in tree.nodes:
+            if n.bl_idname == "ShaderNodeOutputMaterial" and n.inputs[0].is_linked:
+                node_out = n
+                break
+    return node_out
+
+
+def xgspecular_to_roughness(xg_specular: float) -> float:
+    # based on io_scene_obj's way, not sure how accurate to Xeios/XG
+    xg_specular = values_clamp(xg_specular, 0, 1000)
+    roughness = 1.0 - (sqrt(xg_specular / 1000))
+    return roughness
+
+
+def roughness_to_xgspecular(roughness: float) -> float:
+    # based on io_scene_obj's way, not sure how accurate to Xeios/XG
+    spec = 1.0 - roughness
+    spec *= spec * 1000
+    return spec
+
+
+def xg_shadingtype(wrapper: "MyPrincipledBSDFWrapper", mesh: Mesh) -> str:
+    """return the XG/Xeios shading type corresponding to material and mesh properties
+
+    :param wrapper: MyPrincipledBSDFWrapper instance
+    :param mesh: Blender Mesh the MyPrincipledBSDFWrapper material is being applied to
+    :return: "VERTEXCOLORS" or "UNSHADED" or "SHADED"
+    """
+    if mesh.color_attributes.active:
+        return "VERTEXCOLORS"
+
+    if not (wrapper.node_principled_bsdf or wrapper.node_diffuse_bsdf):
+        return "UNSHADED"
+    if (
+        wrapper.node_principled_bsdf
+        and not wrapper.node_principled_bsdf.inputs["Base Color"].is_linked
+        and wrapper.node_principled_bsdf.inputs["Emission"].is_linked
+    ):
+        return "UNSHADED"
+
+    return "SHADED"
+
+
+def material_uses_alpha(material: Material) -> bool:
+    """Returns whether a material cana be reasonably assumed to use alpha
+
+    Intended use: Before using MyPrincipledBSDFWrapper to wrap an already-populated
+    material (i.e. when exporting), this function should be used to check if the
+    material uses alpha, so that the proper `use_alpha` can be passed to the
+    MyPrincipledBSDFWrapper constructor.
+
+    :param material: a Blender Material
+    :return: True if material can be reasonably assumed to use alpha, False otherwise
+    """
+    # non-Node materials don't support alpha
+    if not material.use_nodes:
+        return False
+
+    node_out = get_material_output_node(material)
+
+    # True if the Principled BSDF node is using an Alpha input or < 1.0 Alpha value
+    principled_bsdf = node_search_by_type(node_out, "ShaderNodeBsdfPrincipled")
+    if (
+        principled_bsdf
+        and not principled_bsdf.inputs["Alpha"].is_linked
+        and principled_bsdf.inputs["Alpha"].default_value < 1.0
+    ):
+        return True
+
+    # Assume True if the image texture has an alpha channel and its Alpha output is used
+    # (Potential improvement: check if Alpha output can be reached from Material Output)
+    image_texture = node_search_by_type(node_out, "ShaderNodeTexImage")
+    image = image_texture.image
+    if (
+        image_texture
+        and image_texture.outputs["Alpha"].is_linked
+        and image
+        and not (image.channels < 4 or image.depth in {8, 24})
+        and image.alpha_mode != "NONE"
+    ):
+        return True
+    return False
 
 
 class MyPrincipledBSDFWrapper:
@@ -176,18 +281,7 @@ class MyPrincipledBSDFWrapper:
         # --------------------------------------------------------------------
         # Wrap existing nodes.
 
-        # Get the active (or failing that, any) Material Output node
-        renderer = bpy.context.scene.render.engine
-        node_out = (
-            tree.get_output_node(renderer) if renderer in ("EEVEE", "CYCLES") else None
-        )
-        if node_out is None:
-            node_out = tree.get_output_node("ALL")
-        if node_out is None:
-            for n in nodes:
-                if n.bl_idname == "ShaderNodeOutputMaterial" and n.inputs[0].is_linked:
-                    node_out = n
-                    break
+        node_out = get_material_output_node(self.material)
         # starting from Material Output, search for the Principled BSDF node
         node_principled_bsdf = node_diffuse_bsdf = None
         if node_out is not None:
@@ -316,19 +410,6 @@ class MyPrincipledBSDFWrapper:
 
     image = property(image_get, image_set)
 
-    def projection_get(self) -> str:
-        return (
-            self.node_image_texture.projection
-            if self.node_image_texture is not None
-            else "FLAT"
-        )
-
-    @_set_check
-    def projection_set(self, projection: str) -> None:
-        self.node_image_texture.projection = projection
-
-    projection = property(projection_get, projection_set)
-
     def texcoords_get(self) -> str:
         if not self.use_nodes:
             return "UV"
@@ -416,19 +497,6 @@ class MyPrincipledBSDFWrapper:
 
     specular = property(specular_get, specular_set)
 
-    def specular_tint_get(self) -> float:
-        if not self.use_nodes or self.node_principled_bsdf is None:
-            return 0.0
-        return self.node_principled_bsdf.inputs["Specular Tint"].default_value
-
-    @_set_check
-    def specular_tint_set(self, value: float) -> None:
-        value = values_clamp(value, 0.0, 1.0)
-        if self.use_nodes and self.node_principled_bsdf is not None:
-            self.node_principled_bsdf.inputs["Specular Tint"].default_value = value
-
-    specular_tint = property(specular_tint_get, specular_tint_set)
-
     # --------------------------------------------------------------------
     # Roughness (also sort of inverse of specular hardness...).
 
@@ -461,6 +529,30 @@ class MyPrincipledBSDFWrapper:
             self.node_principled_bsdf.inputs["Alpha"].default_value = value
 
     alpha = property(alpha_get, alpha_set)
+
+    # --------------------------------------------------------------------
+    # Other material settings.
+
+    @property
+    def use_backface_culling(self) -> bool:
+        return self.material.use_backface_culling
+
+    @use_backface_culling.setter
+    @_set_check
+    def use_backface_culling(self, val: bool) -> None:
+        self.material.use_backface_culling = val
+
+    @property
+    def use_eevee_alpha_blend(self) -> bool:
+        return self.material.blend_method == "BLEND"
+
+    @use_eevee_alpha_blend.setter
+    @_set_check
+    def use_eevee_alpha_blend(self, val: bool) -> None:
+        if val:
+            self.material.blend_method = "BLEND"
+        else:
+            self.material.blend_method = "OPAQUE"
 
 
 def main():
