@@ -121,6 +121,9 @@ def xg_shadingtype(wrapper: "MyPrincipledBSDFWrapper", mesh: Mesh) -> str:
     if mesh.color_attributes.active:
         return "VERTEXCOLORS"
 
+    if not wrapper.use_nodes:
+        return "SHADED"
+
     if not (wrapper.node_principled_bsdf or wrapper.node_diffuse_bsdf):
         return "UNSHADED"
     if (
@@ -397,7 +400,9 @@ class MyPrincipledBSDFWrapper:
         return self._node_image_texture
 
     @property
-    def image(self) -> Image:
+    def image(self) -> Optional[Image]:
+        if not self.use_nodes:
+            return None
         return (
             self.node_image_texture.image
             if self.node_image_texture is not None
@@ -407,7 +412,9 @@ class MyPrincipledBSDFWrapper:
     @image.setter
     @_set_check
     def image(self, image: Image) -> None:
-        self.node_image_texture.image = image
+        if self.use_nodes:
+            # node_image_texture gets automatically created
+            self.node_image_texture.image = image
 
     @property
     def texcoords(self) -> str:
@@ -425,23 +432,7 @@ class MyPrincipledBSDFWrapper:
                     self._grid_to_location(0, 0, ref_node=found)
                     self._node_texcoords = found
 
-        if self._node_texcoords is ... and not self.is_readonly:
-            # First, create the Image Texture node if it doesn't exist yet
-            if self._node_image_texture in (None, ...):
-                _ = self.node_image_texture
-
-            # Create new Texture Coordinates node...
-            tree = self.material.node_tree
-            node_texcoords = tree.nodes.new(type="ShaderNodeTexCoord")
-            node_texcoords.label = "Texture Coordinates"
-            self._grid_to_location(
-                -1, 0, dst_node=node_texcoords, ref_node=self.node_image_texture
-            )
-            # ... and link it to the image texture node
-            socket_dst = self.node_image_texture.inputs["Vector"]
-            socket_src = node_texcoords.outputs["UV"]
-            tree.links.new(socket_src, socket_dst)
-            self._node_texcoords = node_texcoords
+        self._create_node_texcoords()
 
         if self.node_image_texture is not None:
             socket = self.node_image_texture.inputs["Vector"]
@@ -449,17 +440,33 @@ class MyPrincipledBSDFWrapper:
                 return socket.links[0].from_socket.name
         return "UV"
 
+    def _create_node_texcoords(self):
+        if self._node_texcoords is ... and not self.is_readonly:
+            # Create new Texture Coordinates node...
+            tree = self.material.node_tree
+            node_texcoords = tree.nodes.new(type="ShaderNodeTexCoord")
+            node_texcoords.label = "Texture Coordinates"
+            self._grid_to_location(
+                -1, 0, dst_node=node_texcoords, ref_node=self.node_image_texture
+            )
+            # ... and link it to the (automatically created) image texture node
+            socket_dst = self.node_image_texture.inputs["Vector"]
+            socket_src = node_texcoords.outputs["UV"]
+            tree.links.new(socket_src, socket_dst)
+            self._node_texcoords = node_texcoords
+
     @texcoords.setter
     @_set_check
     def texcoords(self, texcoords: str) -> None:
         # Image texture node already defaults to UVs, no extra node needed.
         if texcoords == "UV":
             return
-        _ = self.texcoords  # ensure texcoord node exists first
-        tree = self.material.node_tree
-        node_dst = self.node_image_texture
-        socket_src = self._node_texcoords.outputs[texcoords]
-        tree.links.new(socket_src, node_dst.inputs["Vector"])
+        if self.use_nodes:
+            self._create_node_texcoords()
+            tree = self.material.node_tree
+            node_dst = self.node_image_texture
+            socket_src = self._node_texcoords.outputs[texcoords]
+            tree.links.new(socket_src, node_dst.inputs["Vector"])
 
     # --------------------------------------------------------------------
     # Base Color.
