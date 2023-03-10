@@ -348,17 +348,18 @@ class MyPrincipledBSDFWrapper:
             self._node_image_texture = ...  # lazy initialization
         self._node_texcoords = ...
 
-    def use_nodes_get(self) -> bool:
+    @property
+    def use_nodes(self) -> bool:
         return self.material.use_nodes
 
+    @use_nodes.setter
     @_set_check
-    def use_nodes_set(self, val) -> None:
+    def use_nodes(self, val) -> None:
         self.material.use_nodes = val
         self.update()
 
-    use_nodes = property(use_nodes_get, use_nodes_set)
-
-    def node_image_texture_get(self) -> Optional[ShaderNodeTexImage]:
+    @property
+    def node_image_texture(self) -> Optional[ShaderNodeTexImage]:
         if not self.use_nodes:
             return None
         if self._node_image_texture is ...:
@@ -395,22 +396,21 @@ class MyPrincipledBSDFWrapper:
 
         return self._node_image_texture
 
-    node_image_texture = property(node_image_texture_get)
-
-    def image_get(self) -> Image:
+    @property
+    def image(self) -> Image:
         return (
             self.node_image_texture.image
             if self.node_image_texture is not None
             else None
         )
 
+    @image.setter
     @_set_check
-    def image_set(self, image: Image) -> None:
+    def image(self, image: Image) -> None:
         self.node_image_texture.image = image
 
-    image = property(image_get, image_set)
-
-    def texcoords_get(self) -> str:
+    @property
+    def texcoords(self) -> str:
         if not self.use_nodes:
             return "UV"
 
@@ -428,7 +428,7 @@ class MyPrincipledBSDFWrapper:
         if self._node_texcoords is ... and not self.is_readonly:
             # First, create the Image Texture node if it doesn't exist yet
             if self._node_image_texture in (None, ...):
-                self.node_image_texture_get()
+                _ = self.node_image_texture
 
             # Create new Texture Coordinates node...
             tree = self.material.node_tree
@@ -449,86 +449,85 @@ class MyPrincipledBSDFWrapper:
                 return socket.links[0].from_socket.name
         return "UV"
 
+    @texcoords.setter
     @_set_check
-    def texcoords_set(self, texcoords: str) -> None:
+    def texcoords(self, texcoords: str) -> None:
         # Image texture node already defaults to UVs, no extra node needed.
         if texcoords == "UV":
             return
-        self.texcoords_get()  # make sure texcoord node exists first
+        _ = self.texcoords  # ensure texcoord node exists first
         tree = self.material.node_tree
         node_dst = self.node_image_texture
         socket_src = self._node_texcoords.outputs[texcoords]
         tree.links.new(socket_src, node_dst.inputs["Vector"])
 
-    texcoords = property(texcoords_get, texcoords_set)
-
     # --------------------------------------------------------------------
     # Base Color.
 
-    def base_color_get(self) -> Sequence[float]:
+    @property
+    def base_color(self) -> Sequence[float]:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.diffuse_color
         return rgba_to_rgb(self.node_principled_bsdf.inputs["Base Color"].default_value)
 
+    @base_color.setter
     @_set_check
-    def base_color_set(self, color: Sequence[float]) -> None:
+    def base_color(self, color: Sequence[float]) -> None:
         color = values_clamp(color, 0.0, 1.0)
         color = rgb_to_rgba(color)
         self.material.diffuse_color = color
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Base Color"].default_value = color
 
-    base_color = property(base_color_get, base_color_set)
-
     # --------------------------------------------------------------------
     # Specular.
 
-    def specular_get(self) -> float:
+    @property
+    def specular(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.specular_intensity
         return self.node_principled_bsdf.inputs["Specular"].default_value
 
+    @specular.setter
     @_set_check
-    def specular_set(self, value: float) -> None:
+    def specular(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         self.material.specular_intensity = value
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Specular"].default_value = value
 
-    specular = property(specular_get, specular_set)
-
     # --------------------------------------------------------------------
     # Roughness (also sort of inverse of specular hardness...).
 
-    def roughness_get(self) -> float:
+    @property
+    def roughness(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return self.material.roughness
         return self.node_principled_bsdf.inputs["Roughness"].default_value
 
+    @roughness.setter
     @_set_check
-    def roughness_set(self, value: float) -> None:
+    def roughness(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         self.material.roughness = value
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Roughness"].default_value = value
 
-    roughness = property(roughness_get, roughness_set)
-
     # --------------------------------------------------------------------
     # Transparency settings.
 
-    def alpha_get(self) -> float:
+    @property
+    def alpha(self) -> float:
         if not self.use_nodes or self.node_principled_bsdf is None:
             return 1.0
         return self.node_principled_bsdf.inputs["Alpha"].default_value
 
+    @alpha.setter
     @_set_check
-    def alpha_set(self, value: float) -> None:
+    def alpha(self, value: float) -> None:
         value = values_clamp(value, 0.0, 1.0)
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Alpha"].default_value = value
-
-    alpha = property(alpha_get, alpha_set)
 
     # --------------------------------------------------------------------
     # Other material settings.
