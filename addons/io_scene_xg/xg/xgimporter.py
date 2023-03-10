@@ -344,10 +344,9 @@ class XgImporter:
         # 1) Initialize objects & set up hierarchy
         self._init_objs_hierarchy_from_dag()
 
-        # 3) Load regular materials
-        # TODO this is currently done within _load_meshes()
-        # if self._mappings.regmatnode_bpymat:
-        #     self._load_regmaterials()
+        # 3) Load materials (and textures)
+        if self._mappings.regmatnode_bpymat:
+            self._load_materials()
 
         # 5) Load meshes
         if self._mappings.xgdagmesh_bpymeshobj:
@@ -385,11 +384,9 @@ class XgImporter:
             _make_simplified_dag(dagparent, dagchildren, simplified_dag)
 
         for dagnode, dagchildren in simplified_dag.items():
-
             # For xgDagTransforms, create a bone to act as the transform, then
             # create child meshes and parent them to the bone.
             if dagnode.xgnode_type == "xgDagTransform":
-
                 # init bone to use for the xgDagTransform
                 bpybone_name = self._init_bone_from_bonenode(dagnode)
                 # init meshes to be parented to the xgDagTransform's bone
@@ -440,7 +437,6 @@ class XgImporter:
         if bonenode not in bonename_mapping:
             # initialize new Blender bone
             if hasattr(bonenode, "inputMatrix"):
-
                 # create new Blender bone in armature
                 bpyeditbone = bpyarmobj.data.edit_bones.new(name=bonenode.xgnode_name)
                 bpybone_name = bpyeditbone.name
@@ -499,7 +495,6 @@ class XgImporter:
 
         # if mesh doesn't exist yet, create it
         if dagmeshnode not in mesh_mapping:
-
             bpymeshdata = bpy.data.meshes.new(dagmeshnode.xgnode_name)
             bpymeshobj = bpy.data.objects.new(bpymeshdata.name, bpymeshdata)
             self._link_to_blender_func(bpymeshobj)
@@ -526,52 +521,6 @@ class XgImporter:
                     if matnode not in self._mappings.regmatnode_bpymat:
                         bpymat = bpy.data.materials.new(name=matnode.xgnode_name)
                         self._mappings.regmatnode_bpymat[matnode] = bpymat
-
-                        if hasattr(matnode, "inputTexture"):
-                            # set up material nodes to use a texture
-                            bpymat.use_nodes = True
-                            bsdf = bpymat.node_tree.nodes["Principled BSDF"]
-                            bpytex = bpymat.node_tree.nodes.new("ShaderNodeTexImage")
-                            bpymat.node_tree.links.new(
-                                bsdf.inputs["Base Color"], bpytex.outputs["Color"]
-                            )
-
-                            # texture image
-                            # TODO yes, it's kind of early to do during hierarchy setup,
-                            #  but there's no reason to defer loading...
-                            # especially since check_existing will reuse already-loaded
-                            # images by checking path
-
-                            # Look for a likely PNG in the same dir based on texnode.url
-                            texnode = matnode.inputTexture[0]
-                            imagepath = _url_to_png(texnode.url, self._texturedir)
-                            if imagepath is not None and self.options.import_textures:
-                                # load it, and set it as the texture's image
-                                bpyimage = bpy.data.images.load(
-                                    imagepath, check_existing=True
-                                )
-                            else:
-                                # create a placeholder if we tried to import a texture
-                                # and failed, or if we're not importing textures at all.
-                                # but only warn if we tried and failed
-                                if self.options.import_textures and imagepath is None:
-                                    self.warn(
-                                        "no suitable PNG file was found for texture "
-                                        f"{texnode.url!r}, creating placeholder instead"
-                                    )
-                                # TODO reuse existing placeholder for repeated images
-                                #  (images with the same url within this model)
-                                bpyimage = bpy.data.images.new(texnode.url, 128, 128)
-                                bpyimage.filepath = os.path.join(
-                                    self._texturedir, texnode.url
-                                )
-                                bpyimage.source = "FILE"
-                            bpyimage.name = texnode.url
-                            bpytex.image = bpyimage
-
-                            # TODO: among other things, how do vertex colors work.
-                            #  are they activated by xgmaterial settings or xgdagmesh
-                            #  settings
 
                     else:
                         bpymat = self._mappings.regmatnode_bpymat[matnode]
@@ -627,6 +576,45 @@ class XgImporter:
             bpymeshobj = mesh_mapping[dagmeshnode]
 
         return bpymeshobj
+
+    def _load_materials(self) -> None:
+        """load material data from XG scene into the initialized Blender materials"""
+        for matnode, bpymat in list(self._mappings.regmatnode_bpymat.items()):
+            if hasattr(matnode, "inputTexture"):
+                # set up material nodes to use a texture
+                bpymat.use_nodes = True
+                bsdf = bpymat.node_tree.nodes["Principled BSDF"]
+                bpytex = bpymat.node_tree.nodes.new("ShaderNodeTexImage")
+                bpymat.node_tree.links.new(
+                    bsdf.inputs["Base Color"], bpytex.outputs["Color"]
+                )
+
+                # Look for a likely PNG in the same dir based on texnode.url
+                texnode = matnode.inputTexture[0]
+                imagepath = _url_to_png(texnode.url, self._texturedir)
+                if imagepath is not None and self.options.import_textures:
+                    # load it, and set it as the texture's image
+                    bpyimage = bpy.data.images.load(imagepath, check_existing=True)
+                else:
+                    # create a placeholder if we tried to import a texture
+                    # and failed, or if we're not importing textures at all.
+                    # but only warn if we tried and failed
+                    if self.options.import_textures and imagepath is None:
+                        self.warn(
+                            "no suitable PNG file was found for texture "
+                            f"{texnode.url!r}, creating placeholder instead"
+                        )
+                    # TODO reuse existing placeholder for repeated images
+                    #  (images with the same url within this model)
+                    bpyimage = bpy.data.images.new(texnode.url, 128, 128)
+                    bpyimage.filepath = os.path.join(self._texturedir, texnode.url)
+                    bpyimage.source = "FILE"
+                bpyimage.name = texnode.url
+                bpytex.image = bpyimage
+
+                # TODO: among other things, how do vertex colors work.
+                #  are they activated by xgmaterial settings or xgdagmesh
+                #  settings
 
     def _load_meshes(self) -> None:
         """load mesh data from the XG scene into the initialized Blender meshes"""
