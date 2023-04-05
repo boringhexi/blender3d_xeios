@@ -23,6 +23,11 @@ from bpy.types import Action
 from bpy_extras.io_utils import unpack_list
 from mathutils import Matrix, Quaternion, Vector
 
+from ..materials.wrapper import (
+    MyPrincipledBSDFWrapper,
+    xgmaterial_uses_alpha,
+    xgspecular_to_roughness,
+)
 from .xganimsep import AnimSepEntry, read_animseps
 from .xgerrors import XgImportError
 from .xgscene import (
@@ -570,21 +575,29 @@ class XgImporter:
     def _load_materials(self) -> None:
         """load material data from XG scene into the initialized Blender materials"""
         for matnode, bpymat in list(self._mappings.regmatnode_bpymat.items()):
-            if hasattr(matnode, "inputTexture"):
-                # set up material nodes to use a texture
-                bpymat.use_nodes = True
-                bsdf = bpymat.node_tree.nodes["Principled BSDF"]
-                bpytex = bpymat.node_tree.nodes.new("ShaderNodeTexImage")
-                bpymat.node_tree.links.new(
-                    bsdf.inputs["Base Color"], bpytex.outputs["Color"]
-                )
+            matwrap = MyPrincipledBSDFWrapper(
+                bpymat, is_readonly=False, use_alpha=xgmaterial_uses_alpha(matnode)
+            )
 
+            # set color + alpha
+            matwrap.base_color = matnode.diffuse[0:3]
+            matwrap.alpha = matnode.diffuse[3]
+
+            # set specular + roughness
+            matwrap.roughness = xgspecular_to_roughness(matnode.specular[3])
+            rgb = matnode.specular[0:3]
+            matwrap.specular = (rgb[0] + rgb[1] + rgb[2]) / 3  # average color
+
+            # set texture
+            if hasattr(matnode, "inputTexture"):
                 # Look for a likely PNG in the same dir based on texnode.url
                 texnode = matnode.inputTexture[0]
                 imagepath = _url_to_png(texnode.url, self._texturedir)
+
                 if imagepath is not None and self.options.import_textures:
                     # load it, and set it as the texture's image
                     bpyimage = bpy.data.images.load(imagepath, check_existing=True)
+
                 else:
                     # create a placeholder if we tried to import a texture
                     # and failed, or if we're not importing textures at all.
@@ -600,11 +613,20 @@ class XgImporter:
                     bpyimage.filepath = os.path.join(self._texturedir, texnode.url)
                     bpyimage.source = "FILE"
                 bpyimage.name = texnode.url
-                bpytex.image = bpyimage
+                matwrap.image = bpyimage
 
-                # TODO: among other things, how do vertex colors work.
-                #  are they activated by xgmaterial settings or xgdagmesh
-                #  settings
+            # set texcoords
+            if matnode.textureEnv == Constants.TextureEnv.SPHEREMAP:
+                matwrap.texprojection = "SPHERE"
+                matwrap.texcoords = "Reflection"
+
+            # set use_backface_culling
+            matwrap.use_backface_culling = False
+            # TODO makes everything double-sided for now. support properly one day
+            # (depends on xgDagMesh, not xgMaterial)
+
+            if matwrap.use_alpha:
+                matwrap.use_eevee_alpha_blend = True
 
     def _load_meshes(self) -> None:
         """load mesh data from the XG scene into the initialized Blender meshes"""

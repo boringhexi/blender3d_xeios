@@ -20,6 +20,8 @@ from bpy.types import (
 )
 from mathutils import Color
 
+from ..xg.xgscene import Constants, XgMaterial
+
 
 def _set_check(func: Callable) -> Callable:
     from functools import wraps
@@ -137,7 +139,7 @@ def xg_shadingtype(wrapper: "MyPrincipledBSDFWrapper", mesh: Mesh) -> str:
 
 
 def material_uses_alpha(material: Material) -> bool:
-    """Returns whether a material cana be reasonably assumed to use alpha
+    """Returns whether a Blender material can be reasonably assumed to use alpha
 
     Intended use: Before using MyPrincipledBSDFWrapper to wrap an already-populated
     material (i.e. when exporting), this function should be used to check if the
@@ -172,6 +174,27 @@ def material_uses_alpha(material: Material) -> bool:
         and image
         and not (image.channels < 4 or image.depth in {8, 24})
         and image.alpha_mode != "NONE"
+    ):
+        return True
+    return False
+
+
+def xgmaterial_uses_alpha(xgmaterial: XgMaterial) -> bool:
+    """Returns whether a xgMaterial node uses alpha
+
+    Intended use: Before using MyPrincipledBSDFWrapper to wrap a blank material (i.e.
+    when importing), this function should be used to check if the xgMaterial being
+    imported from uses alpha, so that the proper `use_alpha` can be passed to the
+    MyPrincipledBSDFWrapper constructor.
+
+    :param xgmaterial: a XgMaterial node
+    :return: True if xgmaterial uses alpha, False otherwise
+    """
+    if xgmaterial.blendType in (Constants.BlendType.ADD, Constants.BlendType.MIXALPHA):
+        return True
+    if (xgmaterial.flags & Constants.Flags.USEALPHA) and xgmaterial.blendType in (
+        Constants.BlendType.MIX,
+        Constants.BlendType.UNKNOWN,
     ):
         return True
     return False
@@ -390,11 +413,8 @@ class MyPrincipledBSDFWrapper:
                     node_image_texture.outputs["Color"],
                     self.node_principled_bsdf.inputs["Base Color"],
                 )
-                if self.use_alpha:
-                    tree.links.new(
-                        node_image_texture.outputs["Alpha"],
-                        self.node_principled_bsdf.inputs["Alpha"],
-                    )
+                self._link_texalpha_or_floatalpha()
+
                 self._node_image_texture = node_image_texture
 
         return self._node_image_texture
@@ -415,6 +435,18 @@ class MyPrincipledBSDFWrapper:
         if self.use_nodes:
             # node_image_texture gets automatically created
             self.node_image_texture.image = image
+
+    @property
+    def texprojection(self) -> str:
+        if not self.use_nodes:
+            return "FLAT"
+        return self.node_image_texture.projection
+
+    @texprojection.setter
+    @_set_check
+    def texprojection(self, projection: str) -> None:
+        if self.use_nodes:
+            self.node_image_texture.projection = projection
 
     @property
     def texcoords(self) -> str:
@@ -535,6 +567,28 @@ class MyPrincipledBSDFWrapper:
         value = values_clamp(value, 0.0, 1.0)
         if self.use_nodes and self.node_principled_bsdf is not None:
             self.node_principled_bsdf.inputs["Alpha"].default_value = value
+            self._link_texalpha_or_floatalpha()
+
+    def _link_texalpha_or_floatalpha(self):
+        """Choose between using the texture's alpha channel or a constant alpha value
+
+        Determine which to use (favoring constant alpha value if it's < 1.0), then set
+        up or delete the necessary node link.
+        (Xeios can do both alpha types at once, but our simple Blender node setup can't)
+        """
+        tree = self.material.node_tree
+        if self.use_alpha and self.alpha == 1.0:
+            # create link if it doesn't exist
+            if not self.node_principled_bsdf.inputs["Alpha"].is_linked:
+                tree.links.new(
+                    self.node_image_texture.outputs["Alpha"],
+                    self.node_principled_bsdf.inputs["Alpha"],
+                )
+        else:
+            # remove link
+            alphalinks = self.node_principled_bsdf.inputs["Alpha"].links
+            for link in alphalinks:
+                alphalinks.remove(link)
 
     # --------------------------------------------------------------------
     # Other material settings.
@@ -571,7 +625,6 @@ def main():
     # texture = ma_wrap.node_image_texture
     # # Assign a texcoord mode to create the texture coordinate node
     # ma_wrap.texcoords = "Reflection"
-
     # Example: Wrap around an existing read-only nodetree, exposes values to be exported
     ma = bpy.context.active_object.active_material
     ma_wrap = MyPrincipledBSDFWrapper(ma, is_readonly=True)
