@@ -981,7 +981,8 @@ class XgImporter:
         animseps = self._xganimseps
         anim_name_num_digits = len(str(len(animseps) - 1))
 
-        for anim_idx, animsep in enumerate(animseps):
+        # Blender lists NLA tracks from bottom to top, so reverse creation order
+        for anim_idx, animsep in reversed(list(enumerate(animseps))):
             bpyarmobj = self._get_armature(mode="POSE")
             bpyarmobj.animation_data_create()
 
@@ -1011,11 +1012,10 @@ class XgImporter:
             bpy_nla_strip.action_frame_end = animsep.playback_length
             # bpy_nla_strip.extrapolation = "NOTHING"  # nope, looks bad when anim loops
 
-        if animseps:  # prevents case where bpyarmobj hasn't been defined yet
-            # make first animation play by default
-            nlatrack0 = bpyarmobj.animation_data.nla_tracks[0]
-            nlatrack0.is_solo = True
-            bpyarmobj.animation_data.action = None  # just tidier I guess
+            # lock and mute all NLA tracks, just like the glTF importer. This way an
+            # animation only plays when it is starred/solo'd in the GUI
+            bpy_nla_track.mute = True
+            bpy_nla_track.lock = True
 
     def _load_anim_pose_frame(self, xg_keyframe, blender_frame) -> None:
         bpybonename_restscale = self._mappings.bpybonename_restscale
