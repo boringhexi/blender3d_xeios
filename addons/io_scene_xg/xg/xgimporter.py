@@ -39,6 +39,7 @@ from .xgscene import (
     XgDagNode,
     XgDagTransform,
     XgMaterial,
+    XgNode,
     XgScene,
 )
 from .xgscenereader import XgSceneReader
@@ -367,7 +368,7 @@ class XgImporter:
         XgScene data will not be loaded into the Blender objects yet.
         """
         dag = self._xgscene.dag
-        simplified_dag = defaultdict(list)
+        simplified_dag: DefaultDict[XgNode, list[XgNode]] = defaultdict(list)
         for dagparent, dagchildren in dag.items():
             _make_simplified_dag(dagparent, dagchildren, simplified_dag)
 
