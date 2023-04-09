@@ -1001,7 +1001,6 @@ class XgImporter:
                 self._load_anim_pose_frame(xgkeyframeidx, bpyframenum)
 
             bpyaction: Action = bpyarmobj.animation_data.action
-            bpyaction.use_fake_user = True
             bpyaction.frame_end = animsep.playback_length
 
             # put this Action into a new NLA track/strip
