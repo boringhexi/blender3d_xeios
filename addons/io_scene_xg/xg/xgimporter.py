@@ -293,7 +293,7 @@ class XgImporter:
         """
         if self._bpyarmatureobj is None:
             # create Blender armature
-            arm_name = f"{self._bl_name}_arm"
+            arm_name = f"{os.path.splitext(self._bl_name)[0]}_arm"
             bpyarmdata = bpy.data.armatures.new(arm_name)
             bpyarmobj = bpy.data.objects.new(bpyarmdata.name, bpyarmdata)
             self._bpycollection.objects.link(bpyarmobj)
