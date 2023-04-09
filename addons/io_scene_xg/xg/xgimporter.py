@@ -246,11 +246,8 @@ class XgImporter:
         if xganimseps is None:
             self.warn("No animseps data provided, animations will not be imported")
 
-        self._bpyemptyobj = None
+        self._bpycollection = None
         self._bpyarmatureobj = None
-
-        # shortcut for the function that adds a created Blender object to the scene
-        self._link_to_blender_func = None
 
         class Mappings:
             """holds relationships between XgScene data and Blender data"""
@@ -286,16 +283,6 @@ class XgImporter:
             animseps = None
         return cls(xgscene, texturedir, animseps, bl_name=bl_name, **kwargs)
 
-    def _get_empty(self) -> bpy.types.Object:
-        """return Blender Empty object, will be created if it doesn't exist yet"""
-        if self._bpyemptyobj is None:
-            bpyemptyobj = bpy.data.objects.new(self._bl_name, None)
-            self._link_to_blender_func(bpyemptyobj)
-            self._bpyemptyobj = bpyemptyobj
-        else:
-            bpyemptyobj = self._bpyemptyobj
-        return bpyemptyobj
-
     def _get_armature(self, mode: Optional[str] = None) -> bpy.types.Object:
         """return Blender armature object, will be created if it doesn't exist yet
 
@@ -308,9 +295,8 @@ class XgImporter:
             arm_name = f"{self._bl_name}_arm"
             bpyarmdata = bpy.data.armatures.new(arm_name)
             bpyarmobj = bpy.data.objects.new(bpyarmdata.name, bpyarmdata)
-            self._link_to_blender_func(bpyarmobj)
+            self._bpycollection.objects.link(bpyarmobj)
             self._bpyarmatureobj = bpyarmobj
-            bpyarmobj.parent = self._get_empty()  # parent armature to the Empty
         else:
             # retrieve existing Blender armature
             bpyarmobj = self._bpyarmatureobj
@@ -337,14 +323,14 @@ class XgImporter:
         wants to import), the caller should do bpy.context.view_layer.update() to update
         Blender's viewport display
         """
-        # shortcut for the long function to add a created Blender object to the scene
-        self._link_to_blender_func = (
-            bpy.context.view_layer.active_layer_collection.collection.objects.link
-        )
-
         # back to object mode (in case we need to do armature stuff)
         if bpy.context.mode != "OBJECT":
             bpy.ops.object.mode_set(mode="OBJECT")
+
+        # 0) Create new Collection to import into
+        collection = bpy.data.collections.new(self._bl_name)
+        bpy.context.scene.collection.children.link(collection)
+        self._bpycollection = collection
 
         # 1) Initialize objects & set up hierarchy
         self._init_objs_hierarchy_from_dag()
@@ -373,7 +359,6 @@ class XgImporter:
         # back to object mode
         if bpy.context.mode != "OBJECT":
             bpy.ops.object.mode_set(mode="OBJECT")
-        # bpy.context.view_layer.objects.active = None #TODO nah, make the empty active
 
     def _init_objs_hierarchy_from_dag(self):
         """create empty Blender objects and link them in the right hierarchy
@@ -381,8 +366,6 @@ class XgImporter:
         Create empty Blender objects and link them (e.g. assign textures to materials).
         XgScene data will not be loaded into the Blender objects yet.
         """
-        self._get_empty()  # create the Empty that will contain everything
-
         dag = self._xgscene.dag
         simplified_dag = defaultdict(list)
         for dagparent, dagchildren in dag.items():
@@ -499,8 +482,7 @@ class XgImporter:
         if dagmeshnode not in mesh_mapping:
             bpymeshdata = bpy.data.meshes.new(dagmeshnode.xgnode_name)
             bpymeshobj = bpy.data.objects.new(bpymeshdata.name, bpymeshdata)
-            self._link_to_blender_func(bpymeshobj)
-            bpymeshobj.parent = self._get_empty()  # parent mesh to the Empty
+            self._bpycollection.objects.link(bpymeshobj)
             mesh_mapping[dagmeshnode] = bpymeshobj
 
             # create material if it doesn't exist yet
